@@ -11,10 +11,14 @@
 
 X86_EXTERN_FUNC(__imp__sub_00177B8E);
 
+namespace ui {
+extern bool g_skip_intros;  // Recomp Settings > GENERAL > SKIP INTROS
+}
+
 // XMVDecoder_Play(decoder, flags, rect), __stdcall: the library's own player decodes the movie (LOGO1.XMV, the
-// publisher logo) onto the overlay the SDK presents. STEAL_SKIP_MOVIES=1 skips it as if it had finished.
+// publisher logo) onto the overlay the SDK presents. SKIP INTROS or STEAL_SKIP_MOVIES=1 skips it as if it had finished.
 X86_FUNC(sub_00177B8E) {
-    if (std::getenv("STEAL_SKIP_MOVIES")) {
+    if (ui::g_skip_intros || std::getenv("STEAL_SKIP_MOVIES")) {
         kernel::Return(ctx, 0, 3);
         return;
     }
