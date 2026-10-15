@@ -1,7 +1,9 @@
-// Hooks for default.xbe (Double S.T.E.A.L. - The Second Clash, XDK 5849).
+﻿// Hooks for default.xbe (Double S.T.E.A.L. - The Second Clash, XDK 5849).
 #include <cstdlib>
 #include <chrono>
+#include <algorithm>
 #include <cstring>
+#include <vector>
 #include <string>
 
 #include "core/log.h"
@@ -14,6 +16,9 @@ X86_EXTERN_FUNC(__imp__sub_00177B8E);
 namespace ui {
 extern bool g_skip_intros;  // Recomp Settings > GENERAL > SKIP INTROS
 void OptionsShown();        // the game's OPTIONS page is up this frame: Y there opens Recomp Settings
+// the RECOMP SETTINGS row put into the OPTIONS page: its y in the page's units, chosen, the page's fade
+void OptionsRow(int y, bool chosen, float alpha);
+void OpenPage();
 }
 
 // XMVDecoder_Play(decoder, flags, rect), __stdcall: the library's own player decodes the movie (LOGO1.XMV, the
@@ -110,11 +115,152 @@ X86_FUNC(sub_000E8B40) {
     if (NaviLog()) LOGE("navi: column load %d %d -> %u", c, r, ctx.eax);
 }
 
+
+// RECOMP SETTINGS as a row of the game's OPTIONS page, under CONTROLLER SETTING. The page is laid out by its xpr:
+// each element's description holds its place and, for a row, its neighbours. The rows are moved closer (33 units
+// apart to 30) to make room, the cursor passes through the new row in the page's input (the game's highlight is
+// taken off CONTROLLER SETTING or RESET TO DEFAULT while it is on it), and the row itself is drawn by ui.cpp.
+namespace {
+constexpr uint32_t kOptionPageVtable = 0x001CA72C;
+constexpr uint32_t kPageInput = 0x000EBD00;    // thiscall page (buttons): cursor, then the page's handlers
+constexpr uint32_t kPageHighlight = 0x000EB5A0;  // thiscall page (chosen, left): their help and highlight animations
+constexpr uint32_t kPlaySound = 0x0008B960;    // thiscall sound player (id)
+constexpr uint32_t kSoundPlayer = 0x0042D708;
+constexpr uint32_t kCursorSound = 0x2C03, kOkSound = 0x2001;
+// page: +0x10 description (+4 elements), +0x14 elements, +0x24 the chosen one, +0x3C fade (0x100 shown), +0x44 the
+// OK buttons, +0x48 the back buttons. Element: +0x10 description (+0 name, +0xC y), vtable +0x20 highlight (on).
+constexpr int kRowY0 = 77, kRowStep = 33, kNewStep = 30, kRows = 9, kNewRow = 7;  // after CONTROLLER SETTING (6)
+
+uint16_t& U16(uint32_t va) { return *static_cast<uint16_t*>(kernel::HostPtr(va)); }
+
+uint32_t Element(uint32_t page, const char* name, int* index = nullptr) {
+    uint32_t def = kernel::R32(page + 0x10);
+    for (int i = 0; i < int(kernel::R32(def + 4)); i++) {
+        uint32_t el = kernel::R32(kernel::R32(page + 0x14) + i * 4);
+        if (std::strcmp(static_cast<const char*>(kernel::HostPtr(kernel::R32(kernel::R32(el + 0x10)))), name) == 0) {
+            if (index) *index = i;
+            return el;
+        }
+    }
+    return 0;
+}
+
+uint32_t g_page = 0;
+bool g_on_row = false;
+
+// a row's y in the new layout: the rows from the new one down one place, all of them closer
+bool NewY(uint16_t& y) {
+    for (int r = 0; r < kRows; r++)
+        for (int extra : {0, 3})  // values sit 3 lower than their row
+            if (y == kRowY0 + r * kRowStep + extra) {
+                y = uint16_t(kRowY0 + (r < kNewRow ? r : r + 1) * kNewStep + extra);
+                return true;
+            }
+    return false;
+}
+
+// each description once: it outlives the page. def: the page's description, +4 its elements, +8 theirs (0x24
+// each, y at +0xC); +0x14 its timelines, +0x18 theirs (12 bytes, +8 their commands). A move command (type 3) holds
+// where it takes its element from and to (x, y at +0x18, +0x1A and +0x1C, +0x1E), which the element keeps after.
+void Relayout(uint32_t def) {
+    static std::vector<uint32_t> done;
+    if (std::find(done.begin(), done.end(), def) != done.end()) return;
+    done.push_back(def);
+    for (int i = 0; i < int(kernel::R32(def + 4)); i++) NewY(U16(kernel::R32(def + 8) + i * 0x24 + 0xC));
+    for (int t = 0; t < int(kernel::R32(def + 0x14)); t++) {
+        uint32_t tl = kernel::R32(def + 0x18) + t * 12;  // +4 its commands, +8 pointers to them
+        for (int c = 0; c < int(kernel::R32(tl + 4)); c++) {
+            uint32_t cmd = kernel::R32(kernel::R32(tl + 8) + c * 4);
+            uint32_t type = kernel::R32(cmd);
+            if (type != 3 || kernel::R32(cmd + 0xC) != 0) continue;  // moves of the page's own elements
+            NewY(U16(cmd + 0x1A));
+            NewY(U16(cmd + 0x1E));
+        }
+    }
+}
+
+void Highlight(X86Context& ctx, uint32_t page, uint32_t el, int index, bool on) {
+    uint32_t ecx = ctx.ecx;
+    ctx.ecx = el;
+    kernel::CallGuest(ctx, kernel::R32(kernel::R32(el) + 0x20), {on ? 1u : 0u});
+    ctx.ecx = page;
+    kernel::CallGuest(ctx, kPageHighlight, {on ? uint32_t(index) : ~0u, on ? ~0u : uint32_t(index)});
+    ctx.ecx = ecx;
+}
+
+void Sound(X86Context& ctx, uint32_t id) {
+    uint32_t ecx = ctx.ecx;
+    ctx.ecx = kSoundPlayer;
+    kernel::CallGuest(ctx, kPlaySound, {id});
+    ctx.ecx = ecx;
+}
+}  // namespace
+
 // The options menu, each frame it is up (main menu and pause menu): +0x18 the page shown (1 OPTIONS, 3 CONTROLLER
-// SETTING), +0x20 its change (0 settled, 2 leaving).
+// SETTING), +0x20 its change (0 settled, 2 leaving), +0x24 the OPTIONS page.
 X86_EXTERN_FUNC(__imp__sub_0010AB80);
 X86_FUNC(sub_0010AB80) {
     uint32_t menu = ctx.ecx;
     __imp__sub_0010AB80(ctx, base);
-    if (kernel::R32(menu + 0x18) == 1 && kernel::R32(menu + 0x20) == 0) ui::OptionsShown();
+    uint32_t page = kernel::R32(menu + 0x24);
+    bool up = kernel::R32(menu + 0x18) == 1 && page && kernel::R32(page) == kOptionPageVtable;
+    if (!up) return;
+    if (page != g_page) g_page = page, g_on_row = false;
+    if (kernel::R32(menu + 0x20) == 0) ui::OptionsShown();
+    ui::OptionsRow(kRowY0 + kNewRow * kNewStep, g_on_row, std::min(1.0f, int(kernel::R32(page + 0x3C)) / 256.0f));
+}
+
+X86_EXTERN_FUNC(__imp__sub_000EBD00);
+X86_FUNC(sub_000EBD00) {
+    uint32_t page = ctx.ecx, buttons = kernel::R32(ctx.esp + 4);
+    if (page != g_page || kernel::R32(page) != kOptionPageVtable || !buttons) {
+        __imp__sub_000EBD00(ctx, base);
+        return;
+    }
+    constexpr uint32_t kUp = 1, kDown = 2;
+    int controller = -1, reset = -1;
+    uint32_t controller_el = Element(page, "ControllerSetting", &controller);
+    uint32_t reset_el = Element(page, "ResetDefault", &reset);
+    int chosen = int(kernel::R32(page + 0x24));
+    if (!controller_el || !reset_el) {
+        __imp__sub_000EBD00(ctx, base);
+        return;
+    }
+    if (!g_on_row) {
+        // onto the new row from the rows either side of it
+        if ((chosen == controller && (buttons & kDown)) || (chosen == reset && (buttons & kUp))) {
+            Highlight(ctx, page, chosen == controller ? controller_el : reset_el, chosen, false);
+            g_on_row = true;
+            Sound(ctx, kCursorSound);
+            kernel::Return(ctx, 0, 1);
+            return;
+        }
+        __imp__sub_000EBD00(ctx, base);
+        return;
+    }
+    // on the new row: the game's cursor still rests on the row it came from
+    if (buttons & (kUp | kDown)) {
+        bool down = buttons & kDown;
+        uint32_t el = down ? reset_el : controller_el;
+        int index = down ? reset : controller;
+        kernel::W32(page + 0x24, uint32_t(index));
+        Highlight(ctx, page, el, index, true);
+        g_on_row = false;
+        Sound(ctx, kCursorSound);
+    } else if (buttons & kernel::R32(page + 0x44)) {
+        Sound(ctx, kOkSound);
+        ui::OpenPage();
+    } else if (buttons & kernel::R32(page + 0x48)) {
+        g_on_row = false;
+        __imp__sub_000EBD00(ctx, base);  // back, as from any row
+        return;
+    }
+    kernel::Return(ctx, 0, 1);
+}
+
+// a page set up from its description (thiscall page (description, xpr)): the elements take their places from it here
+X86_EXTERN_FUNC(__imp__sub_000EC4D0);
+X86_FUNC(sub_000EC4D0) {
+    if (kernel::R32(ctx.ecx) == kOptionPageVtable) Relayout(kernel::R32(ctx.esp + 4));
+    __imp__sub_000EC4D0(ctx, base);
 }

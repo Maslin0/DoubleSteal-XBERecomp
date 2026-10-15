@@ -101,6 +101,13 @@ bool OptionsUp() {
     return now - g_options_seen.load() < std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(150)).count();
 }
 
+// the RECOMP SETTINGS row in the game's OPTIONS page (hooks.cpp moves the game's rows to make room)
+std::atomic<int> g_row_y{0};
+std::atomic<bool> g_row_chosen{false};
+std::atomic<float> g_row_alpha{0};
+
+ImU32 Fade(ImU32 c, float a) { return (c & 0x00FFFFFF) | (ImU32(((c >> 24) & 0xFF) * a) << 24); }
+
 void Button(ImDrawList* dl, const Frame& f, float x, ImU32 colour, const char* letter, const char* name) {
     dl->AddCircleFilled(f.P(x, 704), 17 * f.s, colour);
     dl->AddCircle(f.P(x, 704), 17 * f.s, IM_COL32(255, 255, 255, 90), 0, 1.5f * f.s);
@@ -417,6 +424,19 @@ void Page() {
     }
 }
 
+// the row as the game's rows are drawn: CONTROLLER SETTING's lettering, green when chosen, then its help line.
+// The page's units to the 1440x810 frame: GUIDE MAP's y 77 sits at 177, 1.53 a unit
+void OptionsRowDraw() {
+    float a = g_row_alpha;
+    if (a <= 0) return;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    Frame f = Fit();
+    float y = 177 + (g_row_y - 77) * 1.53f;
+    bool on = g_row_chosen;
+    Text(dl, f, g_heavy, 46, 720, y, Fade(on ? IM_COL32(84, 206, 52, 255) : IM_COL32(100, 100, 100, 255), a), "RECOMP SETTINGS", kCentre);
+    if (on) Text(dl, f, g_bold, 29, 720, 655, Fade(kHelp, a), "Display, graphics and other settings of this port", kCentre, false);
+}
+
 void Counter(double fps) {
     char text[32];
     std::snprintf(text, sizeof(text), "FPS: %.1f", fps);
@@ -431,6 +451,17 @@ void Counter(double fps) {
 }  // namespace
 
 // the window is up and the DX12 side has not built ImGui's font texture yet: the menu fonts from Windows
+void OptionsRow(int y, bool chosen, float alpha) {
+    g_row_y = y;
+    g_row_chosen = chosen;
+    g_row_alpha = alpha;
+}
+
+void OpenPage() {
+    std::lock_guard lock(app::UiLock());
+    Open();
+}
+
 void OptionsShown() { g_options_seen = Clock::now().time_since_epoch().count(); }
 
 void Window(void*) {
@@ -456,8 +487,7 @@ void Draw(double fps) {
     if (g_open) {
         Page();
     } else if (OptionsUp()) {
-        // beside the page's own A OK and B BACK
-        Button(ImGui::GetForegroundDrawList(), Fit(), 520, IM_COL32(206, 164, 18, 255), "Y", "RECOMP SETTINGS");
+        OptionsRowDraw();
     }
     if (g_fps_counter) Counter(fps);
 }
