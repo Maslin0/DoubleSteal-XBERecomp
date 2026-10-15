@@ -10,6 +10,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -129,12 +130,46 @@ struct Row {
     bool (*step)(int dir);  // -1 or +1; false when the value is already at that end
 };
 
-std::vector<app::Mode>& Modes() {
-    static std::vector<app::Mode> modes = [] {
-        std::vector<app::Mode> m;
+struct Display {
+    std::string device;  // \.\DISPLAY1
+    int number;          // as Windows numbers it
+    app::Mode desktop;
+};
+
+// the connected monitors, by their numbers
+std::vector<Display> Displays() {
+    std::vector<Display> out;
+    EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR mon, HDC, LPRECT, LPARAM list) -> BOOL {
+        MONITORINFOEXW mi{};
+        mi.cbSize = sizeof(mi);
         DEVMODEW dm{};
         dm.dmSize = sizeof(dm);
-        for (DWORD i = 0; EnumDisplaySettingsW(nullptr, i, &dm); i++) {
+        if (!GetMonitorInfoW(mon, &mi)) return TRUE;
+        if (!EnumDisplaySettingsW(mi.szDevice, ENUM_REGISTRY_SETTINGS, &dm) || !dm.dmPelsWidth)
+            EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm);
+        Display d{std::string(), 0, {dm.dmPelsWidth, dm.dmPelsHeight}};
+        for (const wchar_t* c = mi.szDevice; *c; c++) d.device += char(*c);
+        size_t digits = d.device.find_last_not_of("0123456789") + 1;
+        d.number = digits < d.device.size() ? std::atoi(d.device.c_str() + digits) : 0;
+        reinterpret_cast<std::vector<Display>*>(list)->push_back(d);
+        return TRUE;
+    }, LPARAM(&out));
+    std::sort(out.begin(), out.end(), [](const Display& a, const Display& b) { return a.number < b.number; });
+    return out;
+}
+
+// the chosen monitor's modes, smallest first
+std::vector<app::Mode>& Modes() {
+    static std::string of = "?";
+    static std::vector<app::Mode> modes;
+    if (of != app::Get().monitor) {
+        of = app::Get().monitor;
+        modes.clear();
+        std::wstring device(of.begin(), of.end());
+        std::vector<app::Mode>& m = modes;
+        DEVMODEW dm{};
+        dm.dmSize = sizeof(dm);
+        for (DWORD i = 0; EnumDisplaySettingsW(device.empty() ? nullptr : device.c_str(), i, &dm); i++) {
             if (dm.dmBitsPerPel != 32 || dm.dmPelsWidth < 640 || dm.dmPelsHeight < 480) continue;
             if (std::none_of(m.begin(), m.end(),
                              [&](const app::Mode& o) { return o.width == dm.dmPelsWidth && o.height == dm.dmPelsHeight; }))
@@ -143,8 +178,7 @@ std::vector<app::Mode>& Modes() {
         std::sort(m.begin(), m.end(), [](const app::Mode& a, const app::Mode& b) {
             return a.width != b.width ? a.width < b.width : a.height < b.height;
         });
-        return m;
-    }();
+    }
     return modes;
 }
 
@@ -171,6 +205,26 @@ Clock::time_point g_apply_at{};  // a display change goes out once the choice re
 void ApplySoon() { g_apply_at = Clock::now() + std::chrono::milliseconds(700); }
 
 const Row kDisplay[] = {
+    {"MONITOR", "The monitor the game is shown on",
+     [] {
+         auto ds = Displays();
+         for (const Display& d : ds)
+             if (d.device == app::Get().monitor) return std::to_string(d.number) + " (" + Size(d.desktop.width, d.desktop.height) + ")";
+         return std::string("PRIMARY");
+     },
+     [](int dir) {
+         auto ds = Displays();
+         // PRIMARY first, then each monitor by number
+         int i = 0;
+         for (size_t k = 0; k < ds.size(); k++)
+             if (ds[k].device == app::Get().monitor) i = int(k) + 1;
+         int j = std::clamp(i + dir, 0, int(ds.size()));
+         if (j == i) return false;
+         app::Get().monitor = j ? ds[j - 1].device : std::string();
+         app::Get().width = app::Get().height = 0;  // that monitor's desktop size
+         ApplySoon();
+         return true;
+     }},
     {"DISPLAY MODE", "Fullscreen, a borderless window over the desktop or a window",
      [] {
          static const char* k[] = {"FULLSCREEN", "BORDERLESS", "WINDOWED"};
@@ -230,6 +284,9 @@ const Row kDisplay[] = {
 };
 
 const Row kGraphics[] = {
+    {"SMAA", "Smooths jagged edges over the whole picture",
+     [] { return std::string(app::Get().smaa ? "ON" : "OFF"); },
+     [](int dir) { return Flag(app::Get().smaa, dir); }},
     {"ANISOTROPIC FILTERING", "Sharper road and ground textures far away",
      [] {
          uint32_t a = app::Get().aniso;
@@ -245,6 +302,9 @@ const Row kGeneral[] = {
     {"SKIP INTROS", "Leaves out the logo movie at start, from the next launch",
      [] { return std::string(g_skip_intros ? "ON" : "OFF"); },
      [](int dir) { return Flag(g_skip_intros, dir); }},
+    {"PAUSE ON FOCUS LOSS", "The game and its sound stop while the window is in the background",
+     [] { return std::string(app::Get().pause_on_focus_loss ? "ON" : "OFF"); },
+     [](int dir) { return Flag(app::Get().pause_on_focus_loss, dir); }},
 };
 
 struct Section {
@@ -255,8 +315,8 @@ struct Section {
 };
 const Section kSections[] = {
     {"DISPLAY", "Display mode, resolution, frame rate", kDisplay, int(std::size(kDisplay))},
-    {"GRAPHICS", "Texture filtering", kGraphics, int(std::size(kGraphics))},
-    {"GENERAL", "Start up", kGeneral, int(std::size(kGeneral))},
+    {"GRAPHICS", "Antialiasing, texture filtering", kGraphics, int(std::size(kGraphics))},
+    {"GENERAL", "Start up, background pause", kGeneral, int(std::size(kGeneral))},
 };
 constexpr int kSectionCount = int(std::size(kSections));
 
