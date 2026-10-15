@@ -115,7 +115,16 @@ void Button(ImDrawList* dl, const Frame& f, float x, ImU32 colour, const char* l
     Text(dl, f, g_heavy, 30, x + 32, 704, IM_COL32(205, 205, 205, 255), name);
 }
 
+// opened from the game's OPTIONS page: drawn over that page's own background, frame and buttons (hooks.cpp hides
+// its rows and title meanwhile)
+std::atomic<bool> g_over_game{false};
+
 void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std::string& help) {
+    if (g_over_game) {
+        Text(dl, f, g_heavy, 54, 152, 105, kGold, title);
+        Text(dl, f, g_bold, 29, 720, 655, kHelp, help, kCentre, false);
+        return;
+    }
     ImVec2 d = ImGui::GetIO().DisplaySize;
     dl->AddRectFilled({0, 0}, d, IM_COL32(0, 0, 0, 255));
     // the diamond weave behind the rows
@@ -283,15 +292,6 @@ const Row kDisplay[] = {
     {"VERTICAL SYNC", "Waits for the screen's refresh: no tearing",
      [] { return std::string(app::Get().vsync ? "ON" : "OFF"); },
      [](int dir) { return Flag(app::Get().vsync, dir); }},
-    {"MAX FRAME RATE", "The game itself runs at 30 frames per second",
-     [] {
-         uint32_t c = app::Get().fps_cap;
-         return c ? std::to_string(c) : std::string("UNLIMITED");
-     },
-     [](int dir) {
-         static const uint32_t k[] = {30, 60, 75, 120, 144, 165, 240, 0};
-         return Cycle(app::Get().fps_cap, k, dir);
-     }},
     {"FPS COUNTER", "Shows the frame rate in the top left corner",
      [] { return std::string(g_fps_counter ? "ON" : "OFF"); },
      [](int dir) { return Flag(g_fps_counter, dir); }},
@@ -328,7 +328,7 @@ struct Section {
     int count;
 };
 const Section kSections[] = {
-    {"DISPLAY", "Display mode, resolution, frame rate", kDisplay, int(std::size(kDisplay))},
+    {"DISPLAY", "Monitor, display mode, resolution, frame rate counter", kDisplay, int(std::size(kDisplay))},
     {"GRAPHICS", "Antialiasing, texture filtering", kGraphics, int(std::size(kGraphics))},
     {"GENERAL", "Start up, background pause", kGeneral, int(std::size(kGeneral))},
 };
@@ -347,6 +347,7 @@ enum Key { kUp, kDown, kLeft, kRight, kOk, kBack, kKeys };
 void Open() {
     g_section = -1;
     g_row = 0;
+    g_over_game = OptionsUp();
     g_open = true;
 }
 
@@ -461,6 +462,8 @@ void OpenPage() {
     std::lock_guard lock(app::UiLock());
     Open();
 }
+
+bool HideOptions() { return g_open && g_over_game; }
 
 void OptionsShown() { g_options_seen = Clock::now().time_since_epoch().count(); }
 

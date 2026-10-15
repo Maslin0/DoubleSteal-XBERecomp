@@ -19,6 +19,7 @@ void OptionsShown();        // the game's OPTIONS page is up this frame: Y there
 // the RECOMP SETTINGS row put into the OPTIONS page: its y in the page's units, chosen, the page's fade
 void OptionsRow(int y, bool chosen, float alpha);
 void OpenPage();
+bool HideOptions();  // Recomp Settings is drawn over the OPTIONS page: its rows and title go meanwhile
 }
 
 // XMVDecoder_Play(decoder, flags, rect), __stdcall: the library's own player decodes the movie (LOGO1.XMV, the
@@ -207,6 +208,22 @@ X86_FUNC(sub_0010AB80) {
     if (!up) return;
     if (page != g_page) g_page = page, g_on_row = false;
     if (kernel::R32(menu + 0x20) == 0) ui::OptionsShown();
+    // an element is drawn while its +0x24 is set; the background (Bg) and the A and B buttons stay
+    static std::vector<std::pair<uint32_t, uint8_t>> hidden;
+    if (ui::HideOptions() && hidden.empty()) {
+        uint32_t def = kernel::R32(page + 0x10);
+        for (int i = 0; i < int(kernel::R32(def + 4)); i++) {
+            uint32_t el = kernel::R32(kernel::R32(page + 0x14) + i * 4);
+            const char* name = static_cast<const char*>(kernel::HostPtr(kernel::R32(kernel::R32(el + 0x10))));
+            if (!std::strcmp(name, "Bg") || !std::strcmp(name, "A") || !std::strcmp(name, "B")) continue;
+            uint8_t& shown = *static_cast<uint8_t*>(kernel::HostPtr(el + 0x24));
+            hidden.push_back({el, shown});
+            shown = 0;
+        }
+    } else if (!ui::HideOptions() && !hidden.empty()) {
+        for (auto& [el, shown] : hidden) *static_cast<uint8_t*>(kernel::HostPtr(el + 0x24)) = shown;
+        hidden.clear();
+    }
     ui::OptionsRow(kRowY0 + kNewRow * kNewStep, g_on_row, std::min(1.0f, int(kernel::R32(page + 0x3C)) / 256.0f));
 }
 
