@@ -94,6 +94,13 @@ void Pointer(ImDrawList* dl, const Frame& f, float x, float y, int dir) {
     dl->AddTriangleFilled(f.P(x - w, y - h), f.P(x + w, y), f.P(x - w, y + h), kArrow);
 }
 
+// the game's OPTIONS page was up within the last few frames
+std::atomic<int64_t> g_options_seen{0};
+bool OptionsUp() {
+    int64_t now = Clock::now().time_since_epoch().count();
+    return now - g_options_seen.load() < std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(150)).count();
+}
+
 void Button(ImDrawList* dl, const Frame& f, float x, ImU32 colour, const char* letter, const char* name) {
     dl->AddCircleFilled(f.P(x, 704), 17 * f.s, colour);
     dl->AddCircle(f.P(x, 704), 17 * f.s, IM_COL32(255, 255, 255, 90), 0, 1.5f * f.s);
@@ -103,7 +110,7 @@ void Button(ImDrawList* dl, const Frame& f, float x, ImU32 colour, const char* l
 
 void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std::string& help) {
     ImVec2 d = ImGui::GetIO().DisplaySize;
-    dl->AddRectFilled({0, 0}, d, IM_COL32(0, 0, 0, 248));
+    dl->AddRectFilled({0, 0}, d, IM_COL32(0, 0, 0, 255));
     // the diamond weave behind the rows
     for (int r = 0; r < 10; r++)
         for (int c = 0; c < 15; c++) {
@@ -424,6 +431,8 @@ void Counter(double fps) {
 }  // namespace
 
 // the window is up and the DX12 side has not built ImGui's font texture yet: the menu fonts from Windows
+void OptionsShown() { g_options_seen = Clock::now().time_since_epoch().count(); }
+
 void Window(void*) {
     std::lock_guard lock(app::UiLock());
     ImGuiIO& io = ImGui::GetIO();
@@ -444,7 +453,12 @@ void Draw(double fps) {
         g_apply_at = {};
         app::ApplyDisplay();
     }
-    if (g_open) Page();
+    if (g_open) {
+        Page();
+    } else if (OptionsUp()) {
+        // beside the page's own A OK and B BACK
+        Button(ImGui::GetForegroundDrawList(), Fit(), 520, IM_COL32(206, 164, 18, 255), "Y", "RECOMP SETTINGS");
+    }
     if (g_fps_counter) Counter(fps);
 }
 
@@ -488,9 +502,16 @@ void Pad(int port, input::Pad& pad) {
     };
     static bool held[kKeys] = {};
     static Clock::time_point repeat[kKeys];
+    bool y = pad.analog[3] > 30;
+    static bool y_held = false;
+    bool y_pressed = y && !y_held;
+    y_held = y;
     if (sticks) {
         if (g_open) Close();
         else Open();
+    } else if (!g_open && y_pressed && OptionsUp()) {
+        Open();
+        g_swallow = true;
     } else if (g_open) {
         auto t = Clock::now();
         for (int k = 0; k < kKeys; k++) {

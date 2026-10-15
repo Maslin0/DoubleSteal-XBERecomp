@@ -13,6 +13,7 @@ X86_EXTERN_FUNC(__imp__sub_00177B8E);
 
 namespace ui {
 extern bool g_skip_intros;  // Recomp Settings > GENERAL > SKIP INTROS
+void OptionsShown();        // the game's OPTIONS page is up this frame: Y there opens Recomp Settings
 }
 
 // XMVDecoder_Play(decoder, flags, rect), __stdcall: the library's own player decodes the movie (LOGO1.XMV, the
@@ -107,4 +108,13 @@ X86_FUNC(sub_000E8B40) {
     if (!NaviOriginal()) kernel::CallGuest(ctx, kNaviComplete, {});
     __imp__sub_000E8B40(ctx, base);
     if (NaviLog()) LOGE("navi: column load %d %d -> %u", c, r, ctx.eax);
+}
+
+// The options menu, each frame it is up (main menu and pause menu): +0x18 the page shown (1 OPTIONS, 3 CONTROLLER
+// SETTING), +0x20 its change (0 settled, 2 leaving).
+X86_EXTERN_FUNC(__imp__sub_0010AB80);
+X86_FUNC(sub_0010AB80) {
+    uint32_t menu = ctx.ecx;
+    __imp__sub_0010AB80(ctx, base);
+    if (kernel::R32(menu + 0x18) == 1 && kernel::R32(menu + 0x20) == 0) ui::OptionsShown();
 }
