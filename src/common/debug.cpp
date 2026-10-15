@@ -59,6 +59,7 @@ double Now() { return std::chrono::duration<double>(Clock::now() - g_start).coun
 
 void Init() {
     g_start = Clock::now();
+    if (!Env("USER_SESSION").empty()) LOGE("USER_SESSION: started from play_capture.bat");  // test scripts keep this log
     for (auto& item : Split(Env("STEAL_AUTOPRESS"), ',')) {
         size_t c = item.find(':');
         if (c == std::string::npos) continue;
