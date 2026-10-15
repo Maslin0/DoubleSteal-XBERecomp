@@ -43,7 +43,22 @@ X86_FUNC(sub_000E4D10) {
                  scale * f(t + 0x544), kernel::R32(cache + 0x38c), slots.c_str());
         }
     }
+    // The next row or column of tiles loads once the player is 83 units (15 map pixels) into a new cell; until
+    // then the far side of the minimap has no tiles and shows the world through. Load it 3 pixels in instead.
+    // STEAL_NAVI_ORIGINAL=1 keeps the game's own distance.
+    static const bool original = std::getenv("STEAL_NAVI_ORIGINAL") != nullptr;
+    uint32_t margin_at = ctx.ecx + 0x544, margin = kernel::R32(margin_at);
+    uint32_t scale_bits = kernel::R32(ctx.ecx + 0x14 + 0x384);
+    float scale;
+    std::memcpy(&scale, &scale_bits, 4);
+    if (!original && scale > 0) {
+        float near_margin = 3.5f / scale;
+        uint32_t bits;
+        std::memcpy(&bits, &near_margin, 4);
+        kernel::W32(margin_at, bits);
+    }
     __imp__sub_000E4D10(ctx, base);
+    if (!original && scale > 0) kernel::W32(margin_at, margin);
 }
 X86_EXTERN_FUNC(__imp__sub_000E88D0);
 X86_FUNC(sub_000E88D0) {
