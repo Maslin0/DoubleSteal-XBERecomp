@@ -58,7 +58,17 @@ struct Frame {
 Frame Fit() {
     ImVec2 d = ImGui::GetIO().DisplaySize;
     float s = std::min(d.x / kW, d.y / kH);
-    return {{(d.x - kW * s) / 2, (d.y - kH * s) / 2}, s};
+    Frame f{{(d.x - kW * s) / 2, (d.y - kH * s) / 2}, s};
+    // the game's frame with its overscan border left off (app::ShownRect): the same part enlarged
+    float uv[4];
+    const uint32_t* a = app::kGame.safe_area;
+    app::ShownRect(a[4], a[5], uv);
+    if (uv[2] < 1) {
+        float k = 1 / uv[2];
+        f.o = {f.o.x - uv[0] * kW * s * k, f.o.y - uv[1] * kH * s * k};
+        f.s = s * k;
+    }
+    return f;
 }
 
 enum Align { kStart, kCentre, kEnd };
@@ -292,6 +302,9 @@ const Row kDisplay[] = {
     {"VERTICAL SYNC", "Waits for the screen's refresh: no tearing",
      [] { return std::string(app::Get().vsync ? "ON" : "OFF"); },
      [](int dir) { return Flag(app::Get().vsync, dir); }},
+    {"FULL PICTURE", "Fills the screen, leaving off the border kept for old TVs",
+     [] { return std::string(app::Get().full_picture ? "ON" : "OFF"); },
+     [](int dir) { return Flag(app::Get().full_picture, dir); }},
     {"FPS COUNTER", "Shows the frame rate in the top left corner",
      [] { return std::string(g_fps_counter ? "ON" : "OFF"); },
      [](int dir) { return Flag(g_fps_counter, dir); }},
@@ -444,7 +457,9 @@ void Counter(double fps) {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     float px = std::max(16.0f, ImGui::GetIO().DisplaySize.y / 38);
     ImFont* font = g_bold ? g_bold : ImGui::GetFont();
-    ImVec2 at{px * 0.8f, px * 0.6f};
+    // top, between the game's TIME LIMIT and its minimap, clear of its HUD
+    ImVec2 size = font->CalcTextSizeA(px, FLT_MAX, 0, text);
+    ImVec2 at{ImGui::GetIO().DisplaySize.x * 0.79f - size.x, px * 0.5f};
     dl->AddText(font, px, {at.x + 1.5f, at.y + 1.5f}, IM_COL32(0, 0, 0, 220), text);
     dl->AddText(font, px, at, IM_COL32(255, 255, 255, 255), text);
 }

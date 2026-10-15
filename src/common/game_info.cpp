@@ -35,4 +35,5 @@ const app::GameInfo app::kGame = {
     .ui = ui::Draw,                      // ImGui drawing each frame
     .pad = ui::Pad,                        // changes a polled pad
     .rumble = nullptr,                    // changes a rumble before it is set
+    .safe_area = {33, 22, 654, 436, 720, 480},  // the game draws in this part of its 720x480 frame
 };
