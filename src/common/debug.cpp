@@ -2,6 +2,7 @@
 //   STEAL_AUTOPRESS = "secs:button,..."  presses a pad 1 button for 0.2 s at each time (a b x y start back
 //                                        up down left right white black lt rt), "secs:hold-a-5" holds it 5 s
 //   STEAL_CAPTURE_AT = "secs,..."        captures a frame (XBE_CAPTURE_DIR, default "captures") at each time
+//   STEAL_WATCH = "hexaddr,..."           logs the first 8 dwords at each address every 2 s
 //   STEAL_THREADS_AT = "secs,..."        logs every guest thread's registers and stack at each time
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -75,6 +76,20 @@ void Init() {
             for (double t : dumps) {
                 while (Now() < t) Sleep(20);
                 LogThreads();
+            }
+        }).detach();
+    std::vector<uint32_t> watch;
+    for (auto& t : Split(Env("STEAL_WATCH"), ',')) watch.push_back(uint32_t(std::strtoul(t.c_str(), nullptr, 16)));
+    if (!watch.empty())
+        std::thread([watch] {
+            for (;;) {
+                Sleep(2000);
+                for (uint32_t a : watch) {
+                    uint32_t v[8];
+                    for (int i = 0; i < 8; i++) v[i] = kernel::R32(a + i * 4);
+                    LOGE("watch %08X: %08X %08X %08X %08X %08X %08X %08X %08X", a, v[0], v[1], v[2], v[3], v[4], v[5], v[6],
+                         v[7]);
+                }
             }
         }).detach();
     std::vector<double> caps;

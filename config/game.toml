@@ -8,6 +8,7 @@ xdk = 5849
 out = "generated/game"
 partitions = 32
 setjmp = [0x11C900]  # __setjmp3: libjpeg in D3DX longjmps out of a failed decode
+# trace = [0x2A440, 0x2A580]  # log calls and results (XBE_VERBOSE)
 code_sections = [".text", "D3D", "D3DX", "XGRPH", "DSOUND", "XACTENG", "XMV", "WMADEC", "XPP"]
 
 # extra entry points
