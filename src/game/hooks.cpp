@@ -281,3 +281,29 @@ X86_FUNC(sub_000EC4D0) {
     if (kernel::R32(ctx.ecx) == kOptionPageVtable) Relayout(kernel::R32(ctx.esp + 4));
     __imp__sub_000EC4D0(ctx, base);
 }
+
+// STEAL_AUDIO_TRACE: the game's XACT requests. IXACTSoundBank_PlayEx (bank, cue, source; a cue on no sound source
+// plays in 2D, through no submix: its parameters' fields logged raw) and IXACTSoundBank_Stop (bank, cue, flags, cue).
+namespace {
+bool XactTrace() {
+    static const bool on = std::getenv("STEAL_AUDIO_TRACE") != nullptr;
+    return on;
+}
+}  // namespace
+X86_EXTERN_FUNC(__imp__sub_0016CDE3);
+X86_FUNC(sub_0016CDE3) {
+    uint32_t bank = kernel::R32(ctx.esp + 4), params = kernel::R32(ctx.esp + 8), out = kernel::R32(ctx.esp + 12);
+    uint32_t p[4] = {};
+    for (int i = 0; i < 4 && params; i++) p[i] = kernel::R32(params + i * 4);
+    __imp__sub_0016CDE3(ctx, base);
+    if (XactTrace())
+        LOGE("xact play bank %08X params %08X %08X %08X %08X cue out %08X -> %08X (cue %08X)", bank, p[0], p[1], p[2], p[3],
+             out, ctx.eax, out ? kernel::R32(out) : 0);
+}
+X86_EXTERN_FUNC(__imp__sub_0016CE16);
+X86_FUNC(sub_0016CE16) {
+    uint32_t a = kernel::R32(ctx.esp + 4), b = kernel::R32(ctx.esp + 8), c = kernel::R32(ctx.esp + 12),
+             d = kernel::R32(ctx.esp + 16);
+    __imp__sub_0016CE16(ctx, base);
+    if (XactTrace()) LOGE("xact stop %08X %08X %08X %08X -> %08X", a, b, c, d, ctx.eax);
+}
