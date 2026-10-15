@@ -1,6 +1,7 @@
 // Test aids, the same as the native port's:
 //   STEAL_AUTOPRESS = "secs:button,..."  presses a pad 1 button for 0.2 s at each time (a b x y start back
-//                                        up down left right white black lt rt), "secs:hold-a-5" holds it 5 s
+//                                        up down left right white black lt rt, steer-left steer-right stick-up stick-down for the left stick),
+//                                        "secs:hold-a-5" holds it 5 s
 //   STEAL_CAPTURE_AT = "secs,..."        captures a frame (XBE_CAPTURE_DIR, default "captures") at each time
 //   STEAL_WATCH = "hexaddr,..."           logs the first 8 dwords at each address every 2 s
 //   STEAL_THREADS_AT = "secs,..."        logs every guest thread's registers and stack at each time
@@ -63,9 +64,9 @@ void Init() {
         if (c == std::string::npos) continue;
         Press p{std::atof(item.substr(0, c).c_str()), 0.2, item.substr(c + 1)};
         if (p.button.rfind("hold-", 0) == 0) {
-            size_t d = p.button.find('-', 5);
-            p.len = d == std::string::npos ? 1.0 : std::atof(p.button.substr(d + 1).c_str());
-            p.button = p.button.substr(5, d == std::string::npos ? std::string::npos : d - 5);
+            size_t d = p.button.rfind('-');
+            p.len = d < 5 ? 1.0 : std::atof(p.button.substr(d + 1).c_str());
+            p.button = p.button.substr(5, d < 5 ? std::string::npos : d - 5);
         }
         g_presses.push_back(p);
     }
@@ -125,6 +126,11 @@ void Pad(int port, input::Pad& pad) {
             if (p.button == kButtons[i]) pad.buttons |= uint16_t(1u << i);
             if (p.button == kAnalog[i]) pad.analog[i] = 255;
         }
+        // the left stick: steer, "steer-left" / "steer-right", "stick-up" / "stick-down"
+        if (p.button == "steer-left") pad.lx = -32767;
+        if (p.button == "steer-right") pad.lx = 32767;
+        if (p.button == "stick-up") pad.ly = 32767;
+        if (p.button == "stick-down") pad.ly = -32767;
     }
 }
 
