@@ -37,12 +37,15 @@ using Clock = std::chrono::steady_clock;
 // --- the page's look: the game's OPTIONS screen, measured on a 1440x810 frame -------------------------------------
 
 constexpr float kW = 1440, kH = 810;
-const ImU32 kGold = IM_COL32(255, 165, 0, 255);  // title, top lines
-// the game's tints of its white lettering: rows not chosen, the chosen row
+const ImU32 kGold = IM_COL32(184, 120, 0, 255);  // title, top lines
+// the game's tints of its white lettering: rows not chosen, the chosen row's name, its value, all of it at a flash
 const ImU32 kLabel = IM_COL32(97, 97, 97, 255);
 const ImU32 kChosen = IM_COL32(42, 192, 5, 255);
-const ImU32 kArrow = IM_COL32(232, 84, 24, 255);
-const ImU32 kHelp = IM_COL32(255, 166, 0, 255);
+const ImU32 kValueChosen = IM_COL32(186, 121, 0, 255);
+const ImU32 kFlash = IM_COL32(186, 186, 186, 255);
+const ImU32 kTitleTint = IM_COL32(184, 184, 184, 255);  // of the orange title lettering
+const ImU32 kArrow = IM_COL32(184, 56, 0, 255);
+const ImU32 kHelp = IM_COL32(184, 120, 0, 255);
 const ImU32 kLine = IM_COL32(150, 150, 150, 255);
 const ImU32 kDiamond = IM_COL32(19, 19, 19, 255);
 
@@ -51,18 +54,17 @@ ImFont* g_bold = nullptr;  // Arial Bold: the help line, the counter
 constexpr float kFontPx = 64;
 
 // --- the game's lettering ------------------------------------------------------------------------------------------
-// The game's menu rows are sprites of whole words in data\screen\*.xpr (DXT textures): white letters with a black
-// edge, tinted grey or green as the game draws them. Each letter here is cut out of one of those words, along the
-// slant of the lettering, into ImGui's font atlas (g_game); the cuts were measured on the US files, whose sizes
-// are checked. Letters from the smaller words are scaled to the rows' height. Without the files (the first launch,
-// before the game has installed them to Z:) the page falls back to Arial Black.
+// The game's menu rows and page titles are sprites of whole words in data\screen\*.xpr (DXT textures): the rows
+// white letters with a black edge, tinted grey or green as the game draws them, the titles orange. Each letter here
+// is cut out of one of those words, along the slant of the lettering, into ImGui's font atlas (g_game, g_title);
+// the cuts were measured on the US files, whose sizes are checked. Letters from the smaller words are scaled to the
+// rows' height. Without the files (the first launch, before the game has installed them to Z:) the page falls back
+// to Arial Black.
 
 ImFont* g_game = nullptr;
-constexpr float kCell = 30;                // a row sprite's height in texels, the font's size
-constexpr float kBandTop = 7, kBand = 19;  // the letters' rows within it
-constexpr float kSlant = 0.18f;            // the lettering's slant: x moves this much to the right a row up
-constexpr float kSpace = 8.4f;
-constexpr float kTexel = 1.53f;  // a texel of a row sprite in the 1440x810 frame, as the game scales its pages
+ImFont* g_title = nullptr;
+constexpr float kCell = 30;      // a sprite's height in texels, the fonts' size
+constexpr float kTexel = 1.53f;  // a texel of a page's sprite in the 1440x810 frame, as the game scales its pages
 
 struct Sheet {
     const char* file;
@@ -70,7 +72,8 @@ struct Sheet {
     int texture;  // among the file's textures
 };
 const Sheet kSheets[] = {{"Options.xpr", 665600, 0},           {"MainMenu.xpr", 598016, 0}, {"MissionSelect.xpr", 770048, 0},
-                         {"ControllerSetting.xpr", 792576, 1}, {"System.xpr", 415744, 0},   {"LoadGame.xpr", 870400, 2}};
+                         {"ControllerSetting.xpr", 792576, 1}, {"System.xpr", 415744, 0},   {"LoadGame.xpr", 870400, 2},
+                         {"LoadGame.xpr", 870400, 1}};
 
 // a letter: its sheet, the word's rows, its slanted bounds at the bottom row, where it starts and how far it moves
 // the pen (both from the bright middle of its strokes), and its scale to the rows' height
@@ -80,7 +83,7 @@ struct Cut {
     uint16_t y0, y1;
     float left, right, origin, advance, scale;
 };
-const Cut kCuts[] = {
+const Cut kRowCuts[] = {
     {'-', 3, 127, 144, 62.0f, 73.5f, 62.2f, 11.6f, 1.0000f},
     {'0', 4, 120, 135, -2.0f, 15.0f, -0.2f, 13.5f, 1.2667f},
     {'1', 4, 120, 135, 15.0f, 28.5f, 16.8f, 9.5f, 1.2667f},
@@ -117,6 +120,33 @@ const Cut kCuts[] = {
     {'X', 0, 246, 265, 139.5f, 155.0f, 139.2f, 15.6f, 1.0000f},
     {'Y', 1, 37, 56, 125.0f, 146.0f, 125.2f, 16.6f, 1.0000f},
 };
+const Cut kTitleCuts[] = {
+    {'A', 6, 215, 236, 82.5f, 105.0f, 82.6f, 22.8f, 1.0f},
+    {'C', 3, 425, 446, -2.0f, 21.0f, -0.4f, 21.8f, 1.0f},
+    {'D', 6, 215, 236, 154.0f, 179.0f, 158.6f, 20.8f, 1.0f},
+    {'E', 3, 425, 446, 167.0f, 186.5f, 166.6f, 19.8f, 1.0f},
+    {'G', 3, 425, 446, 329.0f, 354.0f, 329.6f, 21.8f, 1.0f},
+    {'H', 6, 245, 265, 162.5f, 184.5f, 162.6f, 21.8f, 1.0f},
+    {'I', 3, 425, 446, 296.5f, 306.0f, 296.6f, 8.8f, 1.0f},
+    {'L', 3, 425, 446, 129.5f, 148.5f, 129.6f, 18.8f, 1.0f},
+    {'M', 1, 5, 26, 57.0f, 83.5f, 58.6f, 24.8f, 1.0f},
+    {'N', 3, 425, 446, 43.5f, 65.5f, 43.6f, 21.8f, 1.0f},
+    {'O', 3, 425, 446, 21.0f, 43.5f, 20.6f, 22.8f, 1.0f},
+    {'P', 0, 5, 26, 22.5f, 42.0f, 22.6f, 19.8f, 1.0f},
+    {'R', 3, 425, 446, 86.5f, 107.5f, 86.6f, 21.8f, 1.0f},
+    {'S', 3, 425, 446, 212.5f, 236.5f, 216.6f, 19.8f, 1.0f},
+    {'T', 3, 425, 446, 65.5f, 86.5f, 65.6f, 20.8f, 1.0f},
+    {'Y', 6, 245, 265, 113.0f, 135.0f, 112.6f, 19.8f, 1.0f},
+};
+
+// a lettering: its letters, their slant (x moves this much to the right a row up), their rows within the cell
+struct Face {
+    const Cut* cuts;
+    size_t count;
+    float slant, top, band, space;
+};
+const Face kRows = {kRowCuts, std::size(kRowCuts), 0.18f, 7, 19, 8.4f};
+const Face kTitles = {kTitleCuts, std::size(kTitleCuts), 0.2f, 5, 21, 8.2f};
 
 struct Image {
     int w = 0, h = 0;
@@ -196,16 +226,16 @@ bool LoadSheet(const std::filesystem::path& dir, const Sheet& s, Image& img) {
 }
 
 // the letter as it goes into the atlas: its own pixels of the word, scaled
-Image CutOut(const Image& sheet, const Cut& c) {
+Image CutOut(const Image& sheet, const Cut& c, float slant) {
     int rows = c.y1 - c.y0, x0 = int(std::floor(c.left));
-    float width = c.right - c.left + rows * kSlant + 2;
+    float width = c.right - c.left + rows * slant + 2;
     Image img;
     img.w = int(std::ceil(width * c.scale));
     img.h = int(std::ceil(rows * c.scale));
     img.rgba.assign(size_t(img.w) * img.h * 4, 0);
     auto add = [&](int x, int y, float weight, float* acc) {  // premultiplied, nothing outside the letter
         if (x < 0 || x >= sheet.w || y < c.y0 || y >= c.y1) return;
-        float slanted = x - (c.y1 - 1 - y) * kSlant;
+        float slanted = x - (c.y1 - 1 - y) * slant;
         if (slanted < c.left || slanted >= c.right) return;
         const uint8_t* p = &sheet.rgba[(size_t(y) * sheet.w + x) * 4];
         float a = p[3] / 255.0f * weight;
@@ -237,25 +267,29 @@ struct Placed {
 };
 std::vector<Placed> g_placed;
 
-void AddLettering(ImGuiIO& io, ImFont* host) {
+// the two faces over hosts (Arial Blacks of the cell's size, for anything else), all or nothing
+void AddLettering(ImGuiIO& io, ImFont* rows, ImFont* titles) {
     int instance = app::Instance();
     std::filesystem::path dir = app::ExeDir() / (instance > 1 ? "hdd" + std::to_string(instance) : std::string("hdd")) /
                                 "Z" / "data" / "screen";
     std::vector<Image> sheets(std::size(kSheets));
     for (size_t i = 0; i < std::size(kSheets); i++)
         if (!LoadSheet(dir, kSheets[i], sheets[i])) return;
-    for (const Cut& c : kCuts) {
-        Image img = CutOut(sheets[c.sheet], c);
-        float top = kBandTop + (kBand - (c.y1 - c.y0) * c.scale) / 2;
-        int rect = io.Fonts->AddCustomRectFontGlyph(host, ImWchar(c.ch), img.w, img.h, c.advance * c.scale,
-                                                    {(std::floor(c.left) - c.origin) * c.scale, top});
-        g_placed.push_back({rect, std::move(img)});
+    for (auto [face, host] : {std::pair{&kRows, rows}, std::pair{&kTitles, titles}}) {
+        for (const Cut* c = face->cuts; c != face->cuts + face->count; c++) {
+            Image img = CutOut(sheets[c->sheet], *c, face->slant);
+            float top = face->top + (face->band - (c->y1 - c->y0) * c->scale) / 2;
+            int rect = io.Fonts->AddCustomRectFontGlyph(host, ImWchar(c->ch), img.w, img.h, c->advance * c->scale,
+                                                        {(std::floor(c->left) - c->origin) * c->scale, top});
+            g_placed.push_back({rect, std::move(img)});
+        }
+        Image space;
+        space.w = space.h = 1;
+        space.rgba.assign(4, 0);
+        g_placed.push_back({io.Fonts->AddCustomRectFontGlyph(host, ' ', 1, 1, face->space), std::move(space)});
     }
-    Image space;
-    space.w = space.h = 1;
-    space.rgba.assign(4, 0);
-    g_placed.push_back({io.Fonts->AddCustomRectFontGlyph(host, ' ', 1, 1, kSpace), std::move(space)});
-    g_game = host;
+    g_game = rows;
+    g_title = titles;
 }
 
 void PlaceLettering(ImGuiIO& io) {
@@ -351,13 +385,27 @@ float Lettering(ImDrawList* dl, const Frame& f, float x, float y, ImU32 colour, 
     float w = g_game->CalcTextSizeA(size, FLT_MAX, 0, s.c_str()).x * widen;
     if (!dl) return w / f.s;
     ImVec2 at = f.P(x, y);
-    at.y -= (kBandTop + kBand / 2) * kTexel * scale * f.s;
+    at.y -= (kRows.top + kRows.band / 2) * kTexel * scale * f.s;
     if (align == kCentre) at.x -= w / 2;
     if (align == kEnd) at.x -= w;
     int first = dl->VtxBuffer.Size;
     dl->AddText(g_game, size, at, colour, s.c_str());
     for (int i = first; i < dl->VtxBuffer.Size; i++) dl->VtxBuffer[i].pos.x = at.x + (dl->VtxBuffer[i].pos.x - at.x) * widen;
     return w / f.s;
+}
+
+// a page's title, the game's orange lettering at its left, (x, y) its left edge and middle
+void Title(ImDrawList* dl, const Frame& f, float x, float y, const std::string& s) {
+    if (!g_title) {
+        Text(dl, f, g_heavy, 54, x, y, kGold, s, kStart, true, Widen());
+        return;
+    }
+    float size = kCell * kTexel * f.s, widen = Widen();
+    ImVec2 at = f.P(x, y);
+    at.y -= (kTitles.top + kTitles.band / 2) * kTexel * f.s;
+    int first = dl->VtxBuffer.Size;
+    dl->AddText(g_title, size, at, kTitleTint, s.c_str());
+    for (int i = first; i < dl->VtxBuffer.Size; i++) dl->VtxBuffer[i].pos.x = at.x + (dl->VtxBuffer[i].pos.x - at.x) * widen;
 }
 
 void Polyline(ImDrawList* dl, const Frame& f, std::initializer_list<ImVec2> pts, ImU32 colour, float thick) {
@@ -367,10 +415,40 @@ void Polyline(ImDrawList* dl, const Frame& f, std::initializer_list<ImVec2> pts,
 }
 
 // the game's orange pointer, a triangle facing left (dir -1) or right (+1)
-void Pointer(ImDrawList* dl, const Frame& f, float x, float y, int dir) {
+void Pointer(ImDrawList* dl, const Frame& f, float x, float y, int dir, float alpha = 1) {
     float w = 13 * dir, h = 10;
-    dl->AddTriangleFilled(f.P(x - w, y - h), f.P(x + w, y), f.P(x - w, y + h), kArrow);
+    dl->AddTriangleFilled(f.P(x - w, y - h), f.P(x + w, y), f.P(x - w, y + h), Fade(kArrow, alpha));
 }
+
+// --- the game's animations, measured on its OPTIONS page (30 frames a second) --------------------------------------
+
+double Frames(Clock::time_point since) { return std::chrono::duration<double>(Clock::now() - since).count() * 30; }
+
+// a page's rows come in one after another from the top: the chosen one at once, row i (from 0) eased in over
+// 9 + 5 (i - 1) frames
+float RowIn(double frames, float row, bool chosen) {
+    if (chosen || row <= 0) return 1;
+    float t = float(frames) / (9 + 5 * (row - 1));
+    return std::min(1.0f, t * t);
+}
+
+// the chosen row flashes white every 22 frames, from its choosing, and fades back over 14
+float Flash(double frames) { return std::max(0.0f, 0.95f - float(std::floor(std::fmod(frames, 22))) * 0.068f); }
+
+// at each flash the arrows beside the chosen row jump toward it and spring back
+float Spring(double frames) { return 20 * std::pow(0.5f, float(std::floor(std::fmod(frames, 22)))); }
+
+ImU32 Mix(ImU32 a, ImU32 b, float t) {
+    ImU32 out = a & 0xFF000000;
+    for (int k = 0; k < 24; k += 8) {
+        float ca = float((a >> k) & 0xFF), cb = float((b >> k) & 0xFF);
+        out |= ImU32(ca + (cb - ca) * t + 0.5f) << k;
+    }
+    return out;
+}
+
+Clock::time_point g_shown_at = Clock::now();   // the page or section came up
+Clock::time_point g_chosen_at = Clock::now();  // the chosen row was chosen
 
 // the game's OPTIONS page was up within the last few frames
 std::atomic<int64_t> g_options_seen{0};
@@ -383,6 +461,7 @@ bool OptionsUp() {
 std::atomic<int> g_row_y{0};
 std::atomic<bool> g_row_chosen{false};
 std::atomic<float> g_row_alpha{0};
+std::atomic<int64_t> g_row_shown_at{0}, g_row_chosen_at{0};  // Clock ticks: the OPTIONS page came up, the row was chosen
 
 void Button(ImDrawList* dl, const Frame& f, float x, ImU32 colour, const char* letter, const char* name) {
     dl->AddCircleFilled(f.P(x, 704), 17 * f.s, colour);
@@ -397,7 +476,7 @@ std::atomic<bool> g_over_game{false};
 
 void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std::string& help) {
     if (g_over_game) {
-        Text(dl, f, g_heavy, 54, 152, 105, kGold, title, kStart, true, Widen());
+        Title(dl, f, 152, 105, title);
         Help(dl, f, help);
         return;
     }
@@ -411,7 +490,7 @@ void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std:
         }
     Polyline(dl, f, {{66, 83}, {1228, 83}, {1276, 47}, {1372, 47}}, kGold, 3);
     Polyline(dl, f, {{66, 128}, {1250, 128}, {1298, 92}, {1372, 92}}, kGold, 3);
-    Text(dl, f, g_heavy, 54, 152, 105, kGold, title, kStart, true, Widen());
+    Title(dl, f, 152, 105, title);
     Polyline(dl, f, {{66, 655}, {125, 655}, {155, 632}, {1285, 632}, {1315, 655}, {1372, 655}}, kLine, 2.5f);
     Help(dl, f, help);
     Polyline(dl, f, {{66, 678}, {1372, 678}}, kLine, 2.5f);
@@ -628,6 +707,7 @@ void Open() {
     g_row = 0;
     g_over_game = OptionsUp();
     g_open = true;
+    g_shown_at = g_chosen_at = Clock::now();
 }
 
 void Close() {
@@ -636,8 +716,17 @@ void Close() {
     app::Save();
 }
 
+void Turn(Key k, int rows);
+
 void Press(Key k) {
     int rows = g_section < 0 ? kSectionCount + 1 : kSections[g_section].count;
+    int section = g_section, row = g_row;
+    Turn(k, rows);
+    if (g_section != section) g_shown_at = g_chosen_at = Clock::now();
+    else if (g_row != row) g_chosen_at = Clock::now();
+}
+
+void Turn(Key k, int rows) {
     switch (k) {
         case kUp: g_row = (g_row + rows - 1) % rows; break;
         case kDown: g_row = (g_row + 1) % rows; break;
@@ -671,16 +760,19 @@ void Press(Key k) {
 void Page() {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     Frame f = Fit();
+    double shown = Frames(g_shown_at), chosen = Frames(g_chosen_at);
+    float flash = Flash(chosen), spring = Spring(chosen);
     if (g_section < 0) {
         Chrome(dl, f, "RECOMP SETTINGS", g_row < kSectionCount ? kSections[g_row].help : "Back to the game");
         for (int i = 0; i <= kSectionCount; i++) {
             bool on = i == g_row;
+            float in = RowIn(shown, float(i), on);
             const char* name = i < kSectionCount ? kSections[i].name : "EXIT";
             float y = 250 + i * 62;
-            float w = Lettering(dl, f, 720, y, on ? kChosen : kLabel, name, kCentre);
+            float w = Lettering(dl, f, 720, y, Fade(on ? Mix(kChosen, kFlash, flash) : kLabel, in), name, kCentre);
             if (on) {
-                Pointer(dl, f, 720 - w / 2 - 36, y, 1);
-                Pointer(dl, f, 720 + w / 2 + 44, y, -1);
+                Pointer(dl, f, 720 - w / 2 - 36 + spring, y, 1);
+                Pointer(dl, f, 720 + w / 2 + 44 - spring, y, -1);
             }
         }
         return;
@@ -692,20 +784,23 @@ void Page() {
     float top = 380 - (sec.count - 1) * kPitch / 2;
     for (int i = 0; i < sec.count; i++) {
         bool on = i == g_row;
+        float in = RowIn(shown, float(i), on);
         float y = top + i * kPitch;
-        ImU32 colour = on ? kChosen : kLabel;
-        Lettering(dl, f, 640, y, colour, sec.rows[i].name, kEnd, kScale);
-        Lettering(dl, f, 674, y, colour, ":", kCentre, kScale);
-        float w = Lettering(dl, f, 730, y, colour, sec.rows[i].value(), kStart, kScale);
+        // as the game's chosen row: the name green, the colon and value orange, all flashing
+        ImU32 name = on ? Mix(kChosen, kFlash, flash) : kLabel, value = on ? Mix(kValueChosen, kFlash, flash) : kLabel;
+        Lettering(dl, f, 640, y, Fade(name, in), sec.rows[i].name, kEnd, kScale);
+        Lettering(dl, f, 674, y, Fade(value, in), ":", kCentre, kScale);
+        float w = Lettering(dl, f, 730, y, Fade(value, in), sec.rows[i].value(), kStart, kScale);
         if (on) {
-            Pointer(dl, f, 704, y, -1);
-            Pointer(dl, f, 730 + w + 30, y, 1);
+            Pointer(dl, f, 704 + spring, y, -1);
+            Pointer(dl, f, 730 + w + 30 - spring, y, 1);
         }
     }
 }
 
 // the row as the game's rows are drawn: CONTROLLER SETTING's lettering, green when chosen, then its help line.
-// The page's units to the 1440x810 frame: GUIDE MAP's y 77 sits at 177, 1.53 a unit
+// The page's units to the 1440x810 frame: GUIDE MAP's y 77 sits at 177, 1.53 a unit. It comes in between
+// CONTROLLER SETTING (the game's row 6) and RESET TO DEFAULT (7).
 void OptionsRowDraw() {
     float a = g_row_alpha;
     if (a <= 0) return;
@@ -713,7 +808,10 @@ void OptionsRowDraw() {
     Frame f = Fit();
     float y = 177 + (g_row_y - 77) * 1.53f;
     bool on = g_row_chosen;
-    Lettering(dl, f, 720, y, Fade(on ? kChosen : kLabel, a), "RECOMP SETTINGS", kCentre);
+    auto at = [](const std::atomic<int64_t>& t) { return Clock::time_point(Clock::duration(t.load())); };
+    a *= RowIn(Frames(at(g_row_shown_at)), 6.5f, false);
+    ImU32 colour = on ? Mix(kChosen, kFlash, Flash(Frames(at(g_row_chosen_at)))) : kLabel;
+    Lettering(dl, f, 720, y, Fade(colour, a), "RECOMP SETTINGS", kCentre);
     if (on) Help(dl, f, "Display, graphics and other settings of this port", a);
 }
 
@@ -734,6 +832,11 @@ void Counter(double fps) {
 
 // the window is up and the DX12 side has not built ImGui's font texture yet: the menu fonts from Windows
 void OptionsRow(int y, bool chosen, float alpha) {
+    int64_t now = Clock::now().time_since_epoch().count();
+    static int64_t last = 0;
+    if (now - last > std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(150)).count()) g_row_shown_at = now;
+    last = now;
+    if (chosen && !g_row_chosen) g_row_chosen_at = now;
     g_row_y = y;
     g_row_chosen = chosen;
     g_row_alpha = alpha;
@@ -762,8 +865,10 @@ void Window(void*) {
     g_heavy = load(L"ariblk.ttf");
     g_bold = load(L"arialbd.ttf");
     // the game's lettering, over an Arial Black of a row's size for what it has not
-    if (ImFont* host = load(L"ariblk.ttf", kCell)) {
-        AddLettering(io, host);
+    ImFont* rows = load(L"ariblk.ttf", kCell);
+    ImFont* titles = load(L"ariblk.ttf", kCell);
+    if (rows && titles) {
+        AddLettering(io, rows, titles);
         PlaceLettering(io);
     }
 }
