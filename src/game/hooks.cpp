@@ -487,3 +487,35 @@ void BoostGlow(uint32_t from, uint32_t reg, float* value) {
 }
 const bool g_glow_boost = (d3d::SetPixelConstantFilter(BoostGlow), true);
 }  // namespace
+
+// The camera's projection (FUN_0002D250 and FUN_0002D140, cdecl (matrix, fov, near, far, width, height); FUN_000275D0
+// builds the players' cameras with them, near 0.5 and far 1200 to 3840 by the scene). STEAL_DRAW_DISTANCE=<factor>
+// moves the far plane out.
+namespace {
+float FarFactor() {
+    static const float factor = [] {
+        const char* env = std::getenv("STEAL_DRAW_DISTANCE");
+        return env ? std::clamp(float(std::atof(env)), 1.0f, 16.0f) : 1.0f;
+    }();
+    return factor;
+}
+void ScaleFar(X86Context& ctx) {
+    constexpr uint32_t kFarArg = 16;
+    float far;
+    uint32_t u = kernel::R32(ctx.esp + kFarArg);
+    std::memcpy(&far, &u, 4);
+    far *= FarFactor();
+    std::memcpy(&u, &far, 4);
+    kernel::W32(ctx.esp + kFarArg, u);
+}
+}  // namespace
+X86_EXTERN_FUNC(__imp__sub_0002D250);
+X86_FUNC(sub_0002D250) {
+    ScaleFar(ctx);
+    __imp__sub_0002D250(ctx, base);
+}
+X86_EXTERN_FUNC(__imp__sub_0002D140);
+X86_FUNC(sub_0002D140) {
+    ScaleFar(ctx);
+    __imp__sub_0002D140(ctx, base);
+}
