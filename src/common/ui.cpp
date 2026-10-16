@@ -32,6 +32,7 @@ extern bool g_filter;
 namespace ui {
 
 bool g_fps_counter = false;
+bool g_vibration = true;
 bool g_skip_intros = false;
 
 namespace {
@@ -702,6 +703,9 @@ const Row kGeneral[] = {
     {"PAUSE ON FOCUS LOSS", "The game and its sound stop while the window is in the background",
      [] { return std::string(app::Get().pause_on_focus_loss ? "ON" : "OFF"); },
      [](int dir) { return Flag(app::Get().pause_on_focus_loss, dir); }},
+    {"VIBRATION", "The controller's rumble",
+     [] { return std::string(g_vibration ? "ON" : "OFF"); },
+     [](int dir) { return Flag(g_vibration, dir); }},
 };
 
 struct Section {
@@ -932,6 +936,11 @@ bool Message(void*, uint32_t msg, uintptr_t wp, intptr_t, intptr_t*) {
         case VK_BACK: Press(kBack); return true;
     }
     return false;
+}
+
+// the motors stay still with VIBRATION off
+void Rumble(int, uint16_t& left, uint16_t& right) {
+    if (!g_vibration) left = right = 0;
 }
 
 // both sticks pressed open and close it; while it is up pad 1 works it and the game gets nothing
