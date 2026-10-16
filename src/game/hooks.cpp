@@ -10,6 +10,7 @@
 #include "core/log.h"
 
 #include "kernel/kernel.h"
+#include "xdk/d3d8.h"
 #include "xdk/hle.h"
 
 X86_EXTERN_FUNC(__imp__sub_00177B8E);
@@ -462,3 +463,26 @@ X86_FUNC(sub_0008B4D0) {
     __imp__sub_0008B4D0(ctx, base);
     if (XactTrace()) LOGE("snd3d stop id %08X from %08X -> %u", id, ret, ctx.eax);
 }
+
+// The frame's glow. Its bright pass (FUN_0003E840 for cutscenes and menus at 0x3FAED, FUN_0003D6B0's at 0x3D74A)
+// sets the gain of what goes over the threshold as constant 0's alpha (0.094, 0.15); the rest comes from a material
+// glow in the scene's alpha. The glow comes out about a third as strong as xemu's on the same frames, for a reason
+// not found, so the gain of those two calls is raised to match (STEAL_BLOOM=<factor> overrides, 1 keeps the game's).
+namespace {
+constexpr uint32_t kBrightPassFrom[] = {0x3FAF2, 0x3D74F};  // the calls' return addresses
+constexpr float kGlowBoost = 1.8f;
+float GlowBoost() {
+    static const float boost = [] {
+        const char* env = std::getenv("STEAL_BLOOM");
+        return env ? std::clamp(float(std::atof(env)), 0.0f, 10.0f) : kGlowBoost;
+    }();
+    return boost;
+}
+void BoostGlow(uint32_t from, uint32_t reg, float* value) {
+    if (reg != 0 || std::find(std::begin(kBrightPassFrom), std::end(kBrightPassFrom), from) == std::end(kBrightPassFrom)) {
+        return;
+    }
+    value[3] = std::min(value[3] * GlowBoost(), 1.0f);
+}
+const bool g_glow_boost = (d3d::SetPixelConstantFilter(BoostGlow), true);
+}  // namespace
