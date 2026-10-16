@@ -330,16 +330,17 @@ X86_FUNC(sub_0016CE16) {
 // A contact's scrape (FUN_000E05B0, thiscall (contacts, &handle, surface, ?, &position, &velocity, ?)): a looping cue
 // while the sliding speed is over the threshold at 0x1C0568, stopped below it. Pressed against a tank the speed
 // crosses it at every call (two a frame), and each stop lets the loop play out its pass (2.6 s): sixty copies a
-// second, a loud drone that takes every voice. A stop here waits until the speed has stayed low for a few calls;
-// one whose contact is no longer asked about is stopped after a moment.
+// second, a loud drone that takes every voice. A stop here waits until the speed has stayed low for a moment (the
+// speed is mostly just under the threshold there, over it now and then: a shorter wait chops the scrape into
+// bursts); one whose contact is no longer asked about is stopped after a moment.
 namespace {
 constexpr uint32_t kScrapeThreshold = 0x1C0568;
 constexpr uint32_t kSoundStop = 0x8B4D0;  // thiscall sound player (id)
-constexpr int kScrapeLowCalls = 8;
+constexpr auto kScrapeHeld = std::chrono::milliseconds(400);
 constexpr auto kScrapeForgotten = std::chrono::milliseconds(500);
 struct Scrape {
-    int low = 0;
-    std::chrono::steady_clock::time_point seen;
+    std::chrono::steady_clock::time_point high, seen;  // the last call over the threshold, the last call
+    bool held = false;                                  // a stop of its sound was held back
 };
 std::vector<std::pair<uint32_t, Scrape>> g_scrapes;  // by the handle's address
 
@@ -359,7 +360,7 @@ X86_FUNC(sub_000E05B0) {
         auto& [at, s] = g_scrapes[i];
         if (at != slot && now - s.seen > kScrapeForgotten) {
             int32_t id = int32_t(kernel::R32(at));
-            if (id >= 0) {
+            if (s.held && id >= 0) {
                 StopSound(ctx, uint32_t(id));
                 kernel::W32(at, ~0u);
             }
@@ -379,17 +380,17 @@ X86_FUNC(sub_000E05B0) {
     bool low = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) < threshold;
     bool playing = int32_t(kernel::R32(slot)) >= 0;
     auto it = std::find_if(g_scrapes.begin(), g_scrapes.end(), [&](auto& e) { return e.first == slot; });
-    if (low && playing) {
+    if (!low) {
         if (it == g_scrapes.end()) it = g_scrapes.insert(g_scrapes.end(), {slot, Scrape{}});
-        it->second.seen = now;
-        if (++it->second.low < kScrapeLowCalls) {
+        it->second.high = it->second.seen = now;
+    } else if (it != g_scrapes.end()) {
+        if (playing && now - it->second.high < kScrapeHeld) {
+            it->second.seen = now;
+            it->second.held = true;
             kernel::Return(ctx, ctx.eax, 6);
             return;
         }
-    }
-    if (it != g_scrapes.end()) {
-        if (low) g_scrapes.erase(it);  // stopped now
-        else it->second = {0, now};
+        g_scrapes.erase(it);  // stopped now
     }
     __imp__sub_000E05B0(ctx, base);
 }
