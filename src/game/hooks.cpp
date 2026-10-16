@@ -290,17 +290,26 @@ bool XactTrace() {
     return on;
 }
 }  // namespace
-// The game's 3D sounds (FUN_0008BDE0) ask XACT for a sound source first. With XACT's voices all taken (a pile-up
-// of crashes) there is none, and the cue plays in 2D anyway; the game keeps no hold of a cue without its source and
-// never stops it: crash loops pile up, a drone until the mission ends. Such a cue is refused as XACT refuses a voice.
+// The game's sounds (FUN_0008BDE0, and FUN_0008B960 through the PlayEx wrapper FUN_0008AED0) ask XACT for a sound
+// source first. With XACT's voices all taken (a pile-up of crashes) there is none, and the cue plays in 2D anyway;
+// the game keeps no hold of a cue without its source and never stops it: crash loops pile up, a drone until the
+// mission ends. Such a cue is refused as XACT refuses a voice.
 constexpr uint32_t kPlay3dReturn = 0x8BE60;
+constexpr uint32_t kWrapperReturn = 0x8AF06;      // FUN_0008AED0's call of PlayEx
+constexpr uint32_t kWrapperCallerSlot = 0x20;     // its caller's return address, from PlayEx's esp
+constexpr uint32_t kPlaySoundReturn = 0x8BAB3;    // FUN_0008B960's call of FUN_0008AED0
 constexpr uint32_t kXactFail = 0x80004005;  // E_FAIL
+bool UntrackedCue(const X86Context& ctx) {
+    uint32_t ret = kernel::R32(ctx.esp);
+    return ret == kPlay3dReturn ||
+           (ret == kWrapperReturn && kernel::R32(ctx.esp + kWrapperCallerSlot) == kPlaySoundReturn);
+}
 X86_EXTERN_FUNC(__imp__sub_0016CDE3);
 X86_FUNC(sub_0016CDE3) {
     uint32_t bank = kernel::R32(ctx.esp + 4), params = kernel::R32(ctx.esp + 8), out = kernel::R32(ctx.esp + 12);
     uint32_t p[4] = {};
     for (int i = 0; i < 4 && params; i++) p[i] = kernel::R32(params + i * 4);
-    if (kernel::R32(ctx.esp) == kPlay3dReturn && params && !p[2]) {
+    if (params && !p[2] && UntrackedCue(ctx)) {
         if (XactTrace()) LOGE("xact play bank %08X cue %X refused: no sound source", bank, p[1]);
         kernel::Return(ctx, kXactFail, 3);
         return;
