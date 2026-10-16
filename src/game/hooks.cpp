@@ -393,6 +393,20 @@ X86_FUNC(sub_000E05B0) {
     }
     __imp__sub_000E05B0(ctx, base);
 }
+// A car's contact sounds (FUN_000DDE10, thiscall (car, contact, ?, &position, &velocity, ?)): ten slots a frame,
+// counted at +0x138, each keeping its sound (+0x13C) while the same contact (+0x140) comes back. With more contacts
+// than that (against a tank) each further one takes the loudest slot and stops its sound, which is started again
+// next frame: sixty starts a second, a drone. The further contacts are left out instead.
+constexpr uint32_t kContactCount = 0x138;
+constexpr int32_t kContactSlots = 10;
+X86_EXTERN_FUNC(__imp__sub_000DDE10);
+X86_FUNC(sub_000DDE10) {
+    if (int32_t(kernel::R32(ctx.ecx + kContactCount)) >= kContactSlots) {
+        kernel::Return(ctx, ctx.eax, 5);
+        return;
+    }
+    __imp__sub_000DDE10(ctx, base);
+}
 
 // the game's 3D sounds (FUN_0008CC90 matches each frame's wanted sounds to its slots by id): a slot's sound started
 // for a wanted one (slot: id, cue, source, cue word; wanted: +0xC id, +0x10 cue word), and stopped by id
