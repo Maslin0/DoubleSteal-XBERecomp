@@ -328,21 +328,22 @@ X86_FUNC(sub_0016CE16) {
     if (XactTrace()) LOGE("xact stop %08X %08X %08X %08X -> %08X", a, b, c, d, ctx.eax);
 }
 // A contact's scrape (FUN_000E05B0, thiscall (contacts, &handle, surface, ?, &position, &velocity, ?)): a looping cue
-// while the sliding speed is over the threshold at 0x1C0568, stopped below it. Pressed against a tank the speed
-// crosses it at every call (two a frame), and each stop lets the loop play out its pass (2.6 s): sixty copies a
-// second, a loud drone that takes every voice. A stop here waits until the speed has stayed low for a moment (the
-// speed is mostly just under the threshold there, over it now and then: a shorter wait chops the scrape into
-// bursts); one whose contact is no longer asked about is stopped after a moment.
+// while the sliding speed is over the threshold at 0x1C0568, stopped below it. Pressed against a tank the speed is
+// mostly just under it and over it now and then, and each stop lets the loop play out its pass: dozens of copies a
+// second, a loud drone that takes every voice. A stop here waits until the speed has stayed low for a moment; a
+// sound no longer asked about is stopped after a moment. Sounds are known by their id, not by the handle's address:
+// the car's contact slots (FUN_000DDE10) hand the handles from slot to slot.
 namespace {
 constexpr uint32_t kScrapeThreshold = 0x1C0568;
 constexpr uint32_t kSoundStop = 0x8B4D0;  // thiscall sound player (id)
 constexpr auto kScrapeHeld = std::chrono::milliseconds(400);
 constexpr auto kScrapeForgotten = std::chrono::milliseconds(500);
 struct Scrape {
+    uint32_t id, at;                                    // the sound, where its handle was last
     std::chrono::steady_clock::time_point high, seen;  // the last call over the threshold, the last call
-    bool held = false;                                  // a stop of its sound was held back
+    bool held;                                          // a stop of it was held back
 };
-std::vector<std::pair<uint32_t, Scrape>> g_scrapes;  // by the handle's address
+std::vector<Scrape> g_scrapes;
 
 void StopSound(X86Context& ctx, uint32_t id) {
     uint32_t ecx = ctx.ecx;
@@ -355,14 +356,14 @@ X86_EXTERN_FUNC(__imp__sub_000E05B0);
 X86_FUNC(sub_000E05B0) {
     uint32_t slot = kernel::R32(ctx.esp + 4), velocity = kernel::R32(ctx.esp + 20);
     auto now = std::chrono::steady_clock::now();
-    // contacts no longer asked about: their sounds stopped
+    int32_t id = int32_t(kernel::R32(slot));
+    // sounds no longer asked about: stopped if a stop of theirs was held back and their handle is still where it was
     for (size_t i = 0; i < g_scrapes.size();) {
-        auto& [at, s] = g_scrapes[i];
-        if (at != slot && now - s.seen > kScrapeForgotten) {
-            int32_t id = int32_t(kernel::R32(at));
-            if (s.held && id >= 0) {
-                StopSound(ctx, uint32_t(id));
-                kernel::W32(at, ~0u);
+        Scrape& s = g_scrapes[i];
+        if (int32_t(s.id) != id && now - s.seen > kScrapeForgotten) {
+            if (s.held && kernel::R32(s.at) == s.id) {
+                StopSound(ctx, s.id);
+                kernel::W32(s.at, ~0u);
             }
             g_scrapes.erase(g_scrapes.begin() + i);
         } else {
@@ -378,21 +379,25 @@ X86_FUNC(sub_000E05B0) {
     float threshold;
     std::memcpy(&threshold, &t, 4);
     bool low = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) < threshold;
-    bool playing = int32_t(kernel::R32(slot)) >= 0;
-    auto it = std::find_if(g_scrapes.begin(), g_scrapes.end(), [&](auto& e) { return e.first == slot; });
-    if (!low) {
-        if (it == g_scrapes.end()) it = g_scrapes.insert(g_scrapes.end(), {slot, Scrape{}});
-        it->second.high = it->second.seen = now;
-    } else if (it != g_scrapes.end()) {
-        if (playing && now - it->second.high < kScrapeHeld) {
-            it->second.seen = now;
-            it->second.held = true;
+    auto it = std::find_if(g_scrapes.begin(), g_scrapes.end(), [&](auto& s) { return int32_t(s.id) == id; });
+    if (low && id >= 0 && it != g_scrapes.end()) {
+        if (now - it->high < kScrapeHeld) {
+            it->at = slot;
+            it->seen = now;
+            it->held = true;
             kernel::Return(ctx, ctx.eax, 6);
             return;
         }
         g_scrapes.erase(it);  // stopped now
     }
     __imp__sub_000E05B0(ctx, base);
+    id = int32_t(kernel::R32(slot));
+    if (!low && id >= 0) {  // playing, perhaps started just now
+        it = std::find_if(g_scrapes.begin(), g_scrapes.end(), [&](auto& s) { return int32_t(s.id) == id; });
+        if (it == g_scrapes.end()) it = g_scrapes.insert(g_scrapes.end(), {uint32_t(id), slot, now, now, false});
+        it->at = slot;
+        it->high = it->seen = now;
+    }
 }
 // A car's contact sounds (FUN_000DDE10, thiscall (car, contact, ?, &position, &velocity, ?)): ten slots a frame,
 // counted at +0x138, each keeping its sound (+0x13C) while the same contact (+0x140) comes back. With more contacts
