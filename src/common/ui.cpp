@@ -924,6 +924,7 @@ void Pad(int port, input::Pad& pad) {
         pad.analog[0] > 30 || (pad.buttons & 0x10),  // A or START
         pad.analog[1] > 30 || (pad.buttons & 0x20),  // B or BACK
     };
+    if (pad.keyboard) std::fill(std::begin(now), std::end(now), false);  // keys work the page through Message
     static bool held[kKeys] = {};
     static Clock::time_point repeat[kKeys];
     bool y = pad.analog[3] > 30;
