@@ -326,3 +326,25 @@ X86_FUNC(sub_0016CE16) {
     __imp__sub_0016CE16(ctx, base);
     if (XactTrace()) LOGE("xact stop %08X %08X %08X %08X -> %08X", a, b, c, d, ctx.eax);
 }
+// the game's 3D sounds (FUN_0008CC90 matches each frame's wanted sounds to its slots by id): a slot's sound started
+// for a wanted one (slot: id, cue, source, cue word; wanted: +0xC id, +0x10 cue word), and stopped by id
+X86_EXTERN_FUNC(__imp__sub_0008BDE0);
+X86_FUNC(sub_0008BDE0) {
+    uint32_t player = ctx.ecx, slot = kernel::R32(ctx.esp + 4), wanted = kernel::R32(ctx.esp + 8);
+    __imp__sub_0008BDE0(ctx, base);
+    if (XactTrace() && wanted) {
+        std::string w;
+        char b[16];
+        for (int i = 0; i < 0x38; i += 4) {
+            std::snprintf(b, sizeof(b), " %08X", kernel::R32(wanted + i));
+            w += b;
+        }
+        LOGE("snd3d play %08X slot %08X wanted %08X:%s -> %08X", player, slot, wanted, w.c_str(), ctx.eax);
+    }
+}
+X86_EXTERN_FUNC(__imp__sub_0008B4D0);
+X86_FUNC(sub_0008B4D0) {
+    uint32_t id = kernel::R32(ctx.esp + 4), ret = kernel::R32(ctx.esp);
+    __imp__sub_0008B4D0(ctx, base);
+    if (XactTrace()) LOGE("snd3d stop id %08X from %08X -> %u", id, ret, ctx.eax);
+}
