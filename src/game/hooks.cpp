@@ -1,4 +1,5 @@
 ﻿// Hooks for default.xbe (Double S.T.E.A.L. - The Second Clash, XDK 5849).
+#include <cstdio>
 #include <cstdlib>
 #include <chrono>
 #include <algorithm>
@@ -518,4 +519,72 @@ X86_EXTERN_FUNC(__imp__sub_0002D140);
 X86_FUNC(sub_0002D140) {
     ScaleFar(ctx);
     __imp__sub_0002D140(ctx, base);
+}
+
+// FRAME RATE 60. The game's logic steps at 60 Hz: its frame (FUN_00023800) sets the scene up, runs up to two steps
+// (TickScene FUN_00019180, thiscall with the step's index 0 or 1 on the stack, or a state's own), each closed by
+// FUN_00031560(0), then draws and swaps on every second vblank. At 60 a frame runs one step and swaps on the next
+// vblank; a second step follows only while the logic is a step or more behind real time, so a slower PC keeps the
+// game's speed with fewer frames. The steps' indices go on alternating as on the console.
+namespace ui {
+extern uint32_t g_frame_rate;  // Recomp Settings > DISPLAY > FRAME RATE: 30 or 60
+}
+namespace {
+using StepClock = std::chrono::steady_clock;
+constexpr uint32_t kStepDone = 0x23A8E;  // FUN_00031560's return into the frame's step loop
+constexpr double kStepHz = 60.0;
+constexpr double kMaxBehind = 4.0;  // steps: more than this (loads, pauses) is let go
+bool g_smooth_frame = false;        // in a frame run at 60
+bool g_clock_running = false;
+StepClock::time_point g_clock_start;
+double g_steps = 0;    // the logic's steps since the clock started
+uint32_t g_index = 0;  // the next TickScene's index
+}  // namespace
+X86_EXTERN_FUNC(__imp__sub_00023800);
+X86_FUNC(sub_00023800) {
+    g_smooth_frame = ui::g_frame_rate >= 60;
+    if (!g_smooth_frame) g_clock_running = false;
+    d3d::SetIntervalOverride(g_smooth_frame ? 1 : 0);
+    __imp__sub_00023800(ctx, base);
+    d3d::SetIntervalOverride(0);
+    g_smooth_frame = false;
+}
+X86_EXTERN_FUNC(__imp__sub_00019180);
+X86_FUNC(sub_00019180) {
+    constexpr uint32_t kIndexArg = 4;
+    if (g_smooth_frame) kernel::W32(ctx.esp + kIndexArg, g_index);
+    g_index = (kernel::R32(ctx.esp + kIndexArg) + 1) & 1;
+    __imp__sub_00019180(ctx, base);
+}
+X86_EXTERN_FUNC(__imp__sub_00031560);
+X86_FUNC(sub_00031560) {
+    bool step_done = g_smooth_frame && kernel::R32(ctx.esp) == kStepDone;
+    __imp__sub_00031560(ctx, base);
+    if (!step_done) return;
+    auto now = StepClock::now();
+    if (!g_clock_running) {
+        g_clock_running = true;
+        g_clock_start = now;
+        g_steps = 0;
+    }
+    g_steps += 1;
+    double due = std::chrono::duration<double>(now - g_clock_start).count() * kStepHz;
+    if (due - g_steps > kMaxBehind) g_steps = std::floor(due);
+    // ebx counts the loop's steps: the loop ends after this one unless the logic is behind
+    if (ctx.ebx == 0 && due < g_steps + 1) ctx.ebx = 1;
+    // STEAL_STEP_LOG=1: the logic's steps and the frames each second into steps.log (60 and 60 at full speed)
+    static const bool log = std::getenv("STEAL_STEP_LOG") != nullptr;
+    static StepClock::time_point last = now;
+    static int steps = 0, frames = 0;
+    steps++;
+    frames += ctx.ebx == 1;  // the loop ends after this step
+    if (log && now - last >= std::chrono::seconds(1)) {
+        static FILE* f = std::fopen("steps.log", "w");
+        if (f) {
+            std::fprintf(f, "%d steps %d frames in %.2f s\n", steps, frames, std::chrono::duration<double>(now - last).count());
+            std::fflush(f);
+        }
+        last = now;
+        steps = frames = 0;
+    }
 }

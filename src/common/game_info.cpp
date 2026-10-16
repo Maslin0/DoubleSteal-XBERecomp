@@ -13,6 +13,7 @@ extern bool g_filter;
 }
 namespace ui {
 extern bool g_fps_counter, g_skip_intros, g_vibration;
+extern uint32_t g_frame_rate;
 void Rumble(int port, uint16_t& left, uint16_t& right);
 void Window(void* hwnd);
 bool Message(void* hwnd, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t* result);
@@ -33,7 +34,8 @@ const app::GameInfo app::kGame = {
     .options = {{"fps_counter", &ui::g_fps_counter, nullptr}, {"skip_intros", &ui::g_skip_intros, nullptr},
                 {"shadow_resolution", nullptr, &shadows::g_resolution},
                 {"shadow_filter", &shadows::g_filter, nullptr},
-                {"vibration", &ui::g_vibration, nullptr}},                      // game settings kept in the settings file
+                {"vibration", &ui::g_vibration, nullptr},
+                {"frame_rate", nullptr, &ui::g_frame_rate}},                      // game settings kept in the settings file
     .load = nullptr,                      // reads more from the settings file's toml::table
     .save = nullptr,                      // writes more into it
     .init = debug::Init,                     // after the settings load, before the window and boot

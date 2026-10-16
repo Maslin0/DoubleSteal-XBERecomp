@@ -34,6 +34,7 @@ namespace ui {
 bool g_fps_counter = false;
 bool g_vibration = true;
 bool g_skip_intros = false;
+uint32_t g_frame_rate = 30;  // 30 the console's, 60 each step of the game's logic shown
 
 namespace {
 
@@ -655,6 +656,12 @@ const Row kDisplay[] = {
     {"FULL PICTURE", "Fills the screen, leaving off the border kept for old TVs",
      [] { return std::string(app::Get().full_picture ? "ON" : "OFF"); },
      [](int dir) { return Flag(app::Get().full_picture, dir); }},
+    {"FRAME RATE", "60 shows every step of the game's logic; a slower PC keeps the game's speed",
+     [] { return std::to_string(g_frame_rate) + (g_frame_rate < 60 ? " (ORIGINAL)" : ""); },
+     [](int dir) {
+         static const uint32_t k[] = {30, 60};
+         return Cycle(g_frame_rate, k, dir);
+     }},
     {"FPS COUNTER", "Shows the frame rate in the top left corner",
      [] { return std::string(g_fps_counter ? "ON" : "OFF"); },
      [](int dir) { return Flag(g_fps_counter, dir); }},
