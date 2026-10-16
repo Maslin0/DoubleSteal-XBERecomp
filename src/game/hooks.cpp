@@ -464,12 +464,13 @@ X86_FUNC(sub_0008B4D0) {
     if (XactTrace()) LOGE("snd3d stop id %08X from %08X -> %u", id, ret, ctx.eax);
 }
 
-// The frame's glow. Its bright pass (FUN_0003E840 for cutscenes and menus at 0x3FAED, FUN_0003D6B0's at 0x3D74A)
-// sets the gain of what goes over the threshold as constant 0's alpha (0.094, 0.15); the rest comes from a material
-// glow in the scene's alpha. The glow comes out about a third as strong as xemu's on the same frames, for a reason
-// not found, so the gain of those two calls is raised to match (STEAL_BLOOM=<factor> overrides, 1 keeps the game's).
+// The cutscenes' glow. Their bright pass (FUN_0003E840, the call at 0x3FAED) sets the gain of what goes over the
+// threshold as constant 0's alpha (0.094); the rest comes from a material glow in the scene's alpha. The glow comes
+// out about a third as strong as xemu's on the same frames, for a reason not found, so that gain is raised to match
+// (STEAL_BLOOM=<factor> overrides, 1 keeps the game's). Driving's pass (FUN_0003D6B0 at 0x3D74A, 0.15) is left
+// alone: raised, it darkens the frame.
 namespace {
-constexpr uint32_t kBrightPassFrom[] = {0x3FAF2, 0x3D74F};  // the calls' return addresses
+constexpr uint32_t kBrightPassFrom[] = {0x3FAF2};  // the call's return address
 constexpr float kGlowBoost = 1.8f;
 float GlowBoost() {
     static const float boost = [] {
