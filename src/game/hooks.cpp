@@ -290,11 +290,21 @@ bool XactTrace() {
     return on;
 }
 }  // namespace
+// The game's 3D sounds (FUN_0008BDE0) ask XACT for a sound source first. With XACT's voices all taken (a pile-up
+// of crashes) there is none, and the cue plays in 2D anyway; the game keeps no hold of a cue without its source and
+// never stops it: crash loops pile up, a drone until the mission ends. Such a cue is refused as XACT refuses a voice.
+constexpr uint32_t kPlay3dReturn = 0x8BE60;
+constexpr uint32_t kXactFail = 0x80004005;  // E_FAIL
 X86_EXTERN_FUNC(__imp__sub_0016CDE3);
 X86_FUNC(sub_0016CDE3) {
     uint32_t bank = kernel::R32(ctx.esp + 4), params = kernel::R32(ctx.esp + 8), out = kernel::R32(ctx.esp + 12);
     uint32_t p[4] = {};
     for (int i = 0; i < 4 && params; i++) p[i] = kernel::R32(params + i * 4);
+    if (kernel::R32(ctx.esp) == kPlay3dReturn && params && !p[2]) {
+        if (XactTrace()) LOGE("xact play bank %08X cue %X refused: no sound source", bank, p[1]);
+        kernel::Return(ctx, kXactFail, 3);
+        return;
+    }
     __imp__sub_0016CDE3(ctx, base);
     if (XactTrace())
         LOGE("xact play bank %08X params %08X %08X %08X %08X cue out %08X -> %08X (cue %08X)", bank, p[0], p[1], p[2], p[3],
