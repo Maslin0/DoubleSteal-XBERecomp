@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <vector>
 #include <string>
@@ -326,6 +327,73 @@ X86_FUNC(sub_0016CE16) {
     __imp__sub_0016CE16(ctx, base);
     if (XactTrace()) LOGE("xact stop %08X %08X %08X %08X -> %08X", a, b, c, d, ctx.eax);
 }
+// A contact's scrape (FUN_000E05B0, thiscall (contacts, &handle, surface, ?, &position, &velocity, ?)): a looping cue
+// while the sliding speed is over the threshold at 0x1C0568, stopped below it. Pressed against a tank the speed
+// crosses it at every call (two a frame), and each stop lets the loop play out its pass (2.6 s): sixty copies a
+// second, a loud drone that takes every voice. A stop here waits until the speed has stayed low for a few calls;
+// one whose contact is no longer asked about is stopped after a moment.
+namespace {
+constexpr uint32_t kScrapeThreshold = 0x1C0568;
+constexpr uint32_t kSoundStop = 0x8B4D0;  // thiscall sound player (id)
+constexpr int kScrapeLowCalls = 8;
+constexpr auto kScrapeForgotten = std::chrono::milliseconds(500);
+struct Scrape {
+    int low = 0;
+    std::chrono::steady_clock::time_point seen;
+};
+std::vector<std::pair<uint32_t, Scrape>> g_scrapes;  // by the handle's address
+
+void StopSound(X86Context& ctx, uint32_t id) {
+    uint32_t ecx = ctx.ecx;
+    ctx.ecx = kSoundPlayer;
+    kernel::CallGuest(ctx, kSoundStop, {id});
+    ctx.ecx = ecx;
+}
+}  // namespace
+X86_EXTERN_FUNC(__imp__sub_000E05B0);
+X86_FUNC(sub_000E05B0) {
+    uint32_t slot = kernel::R32(ctx.esp + 4), velocity = kernel::R32(ctx.esp + 20);
+    auto now = std::chrono::steady_clock::now();
+    // contacts no longer asked about: their sounds stopped
+    for (size_t i = 0; i < g_scrapes.size();) {
+        auto& [at, s] = g_scrapes[i];
+        if (at != slot && now - s.seen > kScrapeForgotten) {
+            int32_t id = int32_t(kernel::R32(at));
+            if (id >= 0) {
+                StopSound(ctx, uint32_t(id));
+                kernel::W32(at, ~0u);
+            }
+            g_scrapes.erase(g_scrapes.begin() + i);
+        } else {
+            i++;
+        }
+    }
+    float v[3];
+    for (int i = 0; i < 3; i++) {
+        uint32_t u = kernel::R32(velocity + i * 4);
+        std::memcpy(&v[i], &u, 4);
+    }
+    uint32_t t = kernel::R32(kScrapeThreshold);
+    float threshold;
+    std::memcpy(&threshold, &t, 4);
+    bool low = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) < threshold;
+    bool playing = int32_t(kernel::R32(slot)) >= 0;
+    auto it = std::find_if(g_scrapes.begin(), g_scrapes.end(), [&](auto& e) { return e.first == slot; });
+    if (low && playing) {
+        if (it == g_scrapes.end()) it = g_scrapes.insert(g_scrapes.end(), {slot, Scrape{}});
+        it->second.seen = now;
+        if (++it->second.low < kScrapeLowCalls) {
+            kernel::Return(ctx, ctx.eax, 6);
+            return;
+        }
+    }
+    if (it != g_scrapes.end()) {
+        if (low) g_scrapes.erase(it);  // stopped now
+        else it->second = {0, now};
+    }
+    __imp__sub_000E05B0(ctx, base);
+}
+
 // the game's 3D sounds (FUN_0008CC90 matches each frame's wanted sounds to its slots by id): a slot's sound started
 // for a wanted one (slot: id, cue, source, cue word; wanted: +0xC id, +0x10 cue word), and stopped by id
 X86_EXTERN_FUNC(__imp__sub_0008BDE0);
