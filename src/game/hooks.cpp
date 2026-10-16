@@ -332,7 +332,9 @@ X86_FUNC(sub_0016CE16) {
 // mostly just under it and over it now and then, and each stop lets the loop play out its pass: dozens of copies a
 // second, a loud drone that takes every voice. A stop here waits until the speed has stayed low for a moment; a
 // sound no longer asked about is stopped after a moment. Sounds are known by their id, not by the handle's address:
-// the car's contact slots (FUN_000DDE10) hand the handles from slot to slot.
+// the car's contact slots (FUN_000DDE10) hand the handles from slot to slot. A contact without a sound gets a fresh
+// slot every frame and reads as a hit, so a stopped scrape would start again at once while the cars still touch: the
+// car's scrapes on that surface stay quiet until it has had no such contact for a moment.
 namespace {
 constexpr uint32_t kScrapeThreshold = 0x1C0568;
 constexpr uint32_t kSoundStop = 0x8B4D0;  // thiscall sound player (id)
@@ -344,6 +346,11 @@ struct Scrape {
     bool held;                                          // a stop of it was held back
 };
 std::vector<Scrape> g_scrapes;
+struct Quiet {
+    uint32_t contacts, surface;
+    std::chrono::steady_clock::time_point seen;
+};
+std::vector<Quiet> g_quiet;  // scrapes stopped while their contact went on
 
 void StopSound(X86Context& ctx, uint32_t id) {
     uint32_t ecx = ctx.ecx;
@@ -379,6 +386,15 @@ X86_FUNC(sub_000E05B0) {
     float threshold;
     std::memcpy(&threshold, &t, 4);
     bool low = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) < threshold;
+    uint32_t contacts = ctx.ecx, surface = kernel::R32(ctx.esp + 8);
+    std::erase_if(g_quiet, [&](const Quiet& q) { return now - q.seen > kScrapeForgotten; });
+    auto quiet = std::find_if(g_quiet.begin(), g_quiet.end(),
+                              [&](auto& q) { return q.contacts == contacts && q.surface == surface; });
+    if (quiet != g_quiet.end() && id < 0) {
+        quiet->seen = now;
+        kernel::Return(ctx, ctx.eax, 6);
+        return;
+    }
     auto it = std::find_if(g_scrapes.begin(), g_scrapes.end(), [&](auto& s) { return int32_t(s.id) == id; });
     if (low && id >= 0 && it != g_scrapes.end()) {
         if (now - it->high < kScrapeHeld) {
@@ -389,6 +405,7 @@ X86_FUNC(sub_000E05B0) {
             return;
         }
         g_scrapes.erase(it);  // stopped now
+        if (quiet == g_quiet.end()) g_quiet.push_back({contacts, surface, now});
     }
     __imp__sub_000E05B0(ctx, base);
     id = int32_t(kernel::R32(slot));
