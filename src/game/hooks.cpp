@@ -400,6 +400,15 @@ X86_EXTERN_FUNC(__imp__sub_0008BDE0);
 X86_FUNC(sub_0008BDE0) {
     uint32_t player = ctx.ecx, slot = kernel::R32(ctx.esp + 4), wanted = kernel::R32(ctx.esp + 8);
     __imp__sub_0008BDE0(ctx, base);
+    // STEAL_AUDIO_COUNT: XACT's free voices (engine +0x80), at most every 2 s
+    static const bool count = std::getenv("STEAL_AUDIO_COUNT") != nullptr;
+    static auto counted = std::chrono::steady_clock::time_point();
+    if (count && std::chrono::steady_clock::now() - counted > std::chrono::seconds(2)) {
+        counted = std::chrono::steady_clock::now();
+        uint32_t engine = kernel::R32(player + 8);
+        LOGE("xact free voices %d, game sounds %d", engine ? int32_t(kernel::R32(engine + 0x80)) : -1,
+             int32_t(kernel::R32(player + 0x1AC)));
+    }
     if (XactTrace() && wanted) {
         std::string w;
         char b[16];
