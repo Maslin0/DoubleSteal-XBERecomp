@@ -26,6 +26,7 @@ void Pad(int port, input::Pad& pad);
 }
 namespace shadows {
 extern uint32_t g_resolution;
+extern bool g_filter;
 }
 
 namespace ui {
@@ -679,6 +680,18 @@ const Row kGraphics[] = {
      [](int dir) {
          static const uint32_t k[] = {0, 512, 1024, 2048, 4096, 8192};
          return Cycle(shadows::g_resolution, k, dir);
+     }},
+    {"SHADOW FILTERING", "Soft shadow edges instead of hard ones",
+     [] { return std::string(shadows::g_filter ? "ON" : "OFF"); },
+     [](int dir) { return Flag(shadows::g_filter, dir); }},
+    {"TEXTURE DETAIL", "Sharper textures far away; SHARPER can shimmer on fine patterns",
+     [] {
+         float b = app::Get().lod_bias;
+         return std::string(b >= 0 ? "NORMAL" : b > -0.75f ? "SHARP" : "SHARPER");
+     },
+     [](int dir) {
+         static const float k[] = {0.0f, -0.5f, -1.0f};
+         return Cycle(app::Get().lod_bias, k, dir);
      }},
 };
 

@@ -9,6 +9,7 @@ void Init();
 }
 namespace shadows {
 extern uint32_t g_resolution;
+extern bool g_filter;
 }
 namespace ui {
 extern bool g_fps_counter, g_skip_intros;
@@ -29,7 +30,8 @@ const app::GameInfo app::kGame = {
     .missing = L"Put the game in the assets folder: its disc image (.iso), or default.xbe with its folders beside it.",
     .images = {{"default.xbe", "DoubleSteal"}},  // each recompiled xbe and its exe, for title launches
     .options = {{"fps_counter", &ui::g_fps_counter, nullptr}, {"skip_intros", &ui::g_skip_intros, nullptr},
-                {"shadow_resolution", nullptr, &shadows::g_resolution}},                      // game settings kept in the settings file
+                {"shadow_resolution", nullptr, &shadows::g_resolution},
+                {"shadow_filter", &shadows::g_filter, nullptr}},                      // game settings kept in the settings file
     .load = nullptr,                      // reads more from the settings file's toml::table
     .save = nullptr,                      // writes more into it
     .init = debug::Init,                     // after the settings load, before the window and boot
