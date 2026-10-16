@@ -24,6 +24,9 @@
 namespace debug {
 void Pad(int port, input::Pad& pad);
 }
+namespace shadows {
+extern uint32_t g_resolution;
+}
 
 namespace ui {
 
@@ -667,6 +670,15 @@ const Row kGraphics[] = {
      [](int dir) {
          static const uint32_t k[] = {0, 2, 4, 8, 16};
          return Cycle(app::Get().aniso, k, dir);
+     }},
+    {"SHADOW RESOLUTION", "Sharper shadows; AUTO follows the render resolution",
+     [] {
+         uint32_t r = shadows::g_resolution;
+         return r ? std::to_string(r) + "X" + std::to_string(r) : std::string("AUTO");
+     },
+     [](int dir) {
+         static const uint32_t k[] = {0, 512, 1024, 2048, 4096, 8192};
+         return Cycle(shadows::g_resolution, k, dir);
      }},
 };
 
