@@ -396,15 +396,18 @@ struct Key {
     char button;
     int circle, word;
 };
-// sprites with two buttons, by their sheet's width and their row in it (texels, the word from 3 before its pixels):
-// PauseMenu.xpr's A OK B CONTINUE and A JUMP B BACK, ReplayMenu.xpr's A OK B HIDE MENU
+// sprites laid out otherwise, by their sheet's width and their row in it (texels, the word from 3 before its pixels):
+// PauseMenu.xpr's A OK B CONTINUE and A JUMP B BACK, ReplayMenu.xpr's A OK B HIDE MENU with two buttons;
+// Result.xpr's A OK, its button some texels into the sprite (lead: how far in the first button may start)
 struct Pair {
     int sheet_w, row;
     Key keys[2];
+    int lead = 8;
 };
 constexpr Pair kPairs[] = {{1024, 210, {{'A', 89, 116}, {'B', 162, 189}}},
                            {1024, 240, {{'A', 89, 115}, {'B', 187, 214}}},
-                           {256, 126, {{'A', 28, 54}, {'B', 103, 127}}}};
+                           {256, 126, {{'A', 28, 54}, {'B', 103, 127}}},
+                           {512, 2, {{'A', 216, 241}, {0, 0, 0}}, 24}};
 
 // A prompt element drawn by imp with sprite (its record in the sheet): its words without their buttons, a piece each,
 // the key lettered before each.
@@ -421,15 +424,22 @@ void DrawPrompt(X86Context& ctx, uint8_t* base, void (*imp)(X86Context&, uint8_t
     float upt = float(u1 - u0) / std::max<int>(w, 1), vpt = float(v1 - v0) / std::max<int>(h, 1);
     Key keys[2];
     int n = 0;
-    if (upt > 0 && vpt > 0) {
-        int sheet_w = int(std::lround(4096 / upt)), row = int(std::lround(v0 / vpt)), left = int(std::lround(u0 / upt));
+    // the sheet's size from its texture's format (+0xC: log2 width in bits 20-23, height 24-27); a sprite may be drawn
+    // larger than its texels (Result.xpr's A OK: 90 texels as 101 units)
+    uint32_t tex = kernel::R32(sprite), format = tex ? kernel::R32(tex + 0xC) : 0;
+    int sheet_w = 1 << ((format >> 20) & 15), sheet_h = 1 << ((format >> 24) & 15);
+    if (tex && upt > 0 && vpt > 0 && u1 > u0) {
+        float left = u0 * sheet_w / 4096.0f, span = (u1 - u0) * sheet_w / 4096.0f, scale = w / span;
+        int row = int(std::lround(v0 * sheet_h / 4096.0f));
         for (const Pair& p : kPairs)
             if (p.sheet_w == sheet_w && std::abs(p.row - row) <= 4) {
                 // those within the sprite (M_B is the B BACK of A JUMP B BACK), the sprite starting by a button (MainMenu.xpr
                 // has its own A OK on such a row)
                 for (const Key& k : p.keys)
-                    if (k.circle - left >= -3 && k.circle - left < w) keys[n++] = {k.button, std::max(k.circle - left, 0), k.word - left};
-                if (n && keys[0].circle > 8) n = 0;
+                    if (k.button && k.circle - left >= -3 && k.circle - left < span)
+                        keys[n++] = {k.button, int(std::lround(std::max(k.circle - left, 0.0f) * scale)),
+                                     int(std::lround((k.word - left) * scale))};
+                if (n && keys[0].circle > p.lead * scale) n = 0;
                 break;
             }
     }
@@ -463,7 +473,8 @@ void DrawPrompt(X86Context& ctx, uint8_t* base, void (*imp)(X86Context&, uint8_t
     uint32_t colour = kernel::CallGuest(ctx, kElementColour, {frame});
     if (std::getenv("STEAL_PROMPT_LOG")) {
         static std::vector<std::string> logged;
-        if (std::find(logged.begin(), logged.end(), name) == logged.end() && (logged.push_back(name), true))
+        std::string id = std::string(name) + std::to_string(sprite);
+        if (std::find(logged.begin(), logged.end(), id) == logged.end() && (logged.push_back(id), true))
             LOGW("prompt %s sprite u0 %u v0 %u u1 %u v1 %u w %u h %u keys %d x %.1f y %.1f anchor %X colour %08X", name, u0, v0, u1,
                  v1, w, h, n, at, y, anchor, colour);
     }
