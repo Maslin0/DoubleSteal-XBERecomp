@@ -79,6 +79,7 @@ struct Prompt {
 std::mutex g_prompt_lock;
 std::vector<Prompt> g_prompts_next, g_prompts;
 constexpr float kPromptScale = 0.6f;  // the prompts' words against the rows' lettering
+constexpr int kPromptGrey = 166;      // the prompts' words' grey
 
 // --- the game's lettering ------------------------------------------------------------------------------------------
 // The game's menu rows and page titles are sprites of whole words in data\screen\*.xpr (DXT textures): the rows
@@ -517,7 +518,9 @@ void PromptsDraw() {
     for (const Prompt& p : prompts) {
         // as the A and B sprites are placed (measured on OPTIONS at 1080p): their top at 420 is 684.7, 1.46 a texel
         float x = 720 + (p.x - 320) * PageUnit(), y = 684.7f + (p.y + p.h / 2 - 420) * 1.46f;
-        ImU32 c = IM_COL32((p.colour >> 16) & 0xFF, (p.colour >> 8) & 0xFF, p.colour & 0xFF, p.colour >> 24);
+        // the words are their sprite's grey (166 at most, 1080p) times the colour: the key as light
+        auto lit = [&](int shift) { return int(((p.colour >> shift) & 0xFF) * kPromptGrey / 255); };
+        ImU32 c = IM_COL32(lit(16), lit(8), lit(0), p.colour >> 24);
         Lettering(dl, f, x, y, c, PromptText(p.key), kStart, kPromptScale);
     }
 }
@@ -667,7 +670,8 @@ void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std:
                 std::string key = PromptText(i ? "ESC" : "ENTER");
                 float room = Lettering(nullptr, f, 0, 0, 0, key + " ", kStart, kPromptScale);
                 float at = left + keys_room;
-                Lettering(dl, f, at, (top + bottom) / 2, Fade(IM_COL32(191, 191, 191, 255), in), key, kStart, kPromptScale);
+                Lettering(dl, f, at, (top + bottom) / 2, Fade(IM_COL32(kPromptGrey, kPromptGrey, kPromptGrey, 255), in), key,
+                          kStart, kPromptScale);
                 dl->AddImage(atlas->TexID, f.P(at + room, top), f.P(at + room + (w - split) * sx, bottom), {uvx, uv0.y},
                              uv1, Fade(IM_COL32(191, 191, 191, 255), in));
                 keys_room += room - split * sx;
@@ -691,7 +695,8 @@ struct Row {
     const char* help;
     std::string (*value)();
     bool (*step)(int dir);  // -1 or +1; false when the value is already at that end
-    bool keys = false;  // a control's keys: OK waits for one
+    bool keys = false;    // a control's keys: OK waits for one
+    bool button = false;  // a button, as RESET TO DEFAULT: OK does it, no value
 };
 
 struct Display {
@@ -926,9 +931,6 @@ bool KeyStep(int dir) {
     {controls::Label(c), "OK sets its key, right adds a second, left takes the second off", Keys<c>, KeyStep<c>, true}
 
 const Row kKeyboard[] = {
-    {"KEYBOARD", "The keyboard works controller 1 while the game window has the focus",
-     [] { return std::string(app::Get().keyboard ? "ON" : "OFF"); },
-     [](int dir) { return Flag(app::Get().keyboard, dir); }},
     KEY_ROW(0),
     KEY_ROW(1),
     KEY_ROW(2),
@@ -947,7 +949,7 @@ const Row kKeyboard[] = {
     KEY_ROW(15),
     KEY_ROW(16),
     {"RESET KEYS", "All the keys back as they were at first", [] { return std::string(); },
-     [](int dir) { return dir > 0 && controls::Reset(); }},
+     [](int dir) { return dir > 0 && controls::Reset(); }, false, true},
 };
 #undef KEY_ROW
 
@@ -1062,6 +1064,7 @@ void Turn(Key k, int rows) {
             break;
         case kLeft:
         case kRight:
+            if (g_section >= 0 && kSections[g_section].rows[g_row].button) break;
             if (g_section >= 0 && kSections[g_section].rows[g_row].step(k == kRight ? 1 : -1)) {
                 app::Save();
                 Play(kSoundValue);
@@ -1078,6 +1081,9 @@ void Turn(Key k, int rows) {
                     g_section = g_row, g_row = 0;
                     Play(kSoundOk);
                 }
+            } else if (kSections[g_section].rows[g_row].button) {
+                if (kSections[g_section].rows[g_row].step(1)) app::Save();
+                Play(kSoundOk);
             } else if (kSections[g_section].rows[g_row].keys) {
                 kSections[g_section].rows[g_row].step(2);  // waits for its first key
                 Play(kSoundOk);
@@ -1143,6 +1149,16 @@ void Page() {
         if (on && g_capture >= 0) in *= 0.55f + 0.45f * float(std::cos(Frames(g_capture_at) * 0.4));
         // as the game's chosen row: the name green, the colon and value orange, all flashing
         ImU32 name = on ? Mix(kChosen, kFlash, flash) : kLabel, value = on ? Mix(kValueChosen, kFlash, flash) : kLabel;
+        if (sec.rows[i].button) {
+            // as the game's one-word rows (RESET TO DEFAULT): its name in the middle, the arrows either side
+            float x = 720 - 100 * out;
+            float w = Lettering(dl, f, x, y, Fade(name, in), sec.rows[i].name, kCentre, kScale);
+            if (on) {
+                Pointer(dl, f, x - w / 2 - 36 + spring, y, 1, in);
+                Pointer(dl, f, x + w / 2 + 44 - spring, y, -1, in);
+            }
+            continue;
+        }
         float colon = 674 - 100 * out, at = 730 - 150 * out;
         // inside the diamond weave (x 215 to 1261): names from 230, values to 1200 with the arrow after
         Lettering(dl, f, 640 - 50 * out, y, Fade(name, in), sec.rows[i].name, kEnd, kScale, 640 - 230);

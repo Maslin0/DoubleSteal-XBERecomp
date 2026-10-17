@@ -364,7 +364,8 @@ X86_FUNC(sub_000EB610) {
     }
     uint32_t sprite = kernel::R32(kernel::R32(el + 0x14) + 0x10) + uint32_t(int16_t(U16(desc + 6))) * 0x18;
     uint16_t u0 = U16(sprite + 4), w = U16(sprite + 0xC), h = U16(sprite + 0xE);
-    uint16_t cut = uint16_t(std::min<int>(h + 2, w - 1));
+    // the button and its gap: a circle a little under the sprite's height (on Options.xpr: 30 high, the word from 28)
+    uint16_t cut = uint16_t(std::min<int>(h - 2, w - 1));
     float& x = *static_cast<float*>(kernel::HostPtr(el + 0x18));
     float y = *static_cast<float*>(kernel::HostPtr(el + 0x1C));
     float left = x;

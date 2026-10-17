@@ -14,6 +14,7 @@
 
 #include <toml++/toml.hpp>
 
+#include "app/app.h"
 #include "core/input.h"
 #include "core/log.h"
 
@@ -131,6 +132,8 @@ void Update(int type, bool racing) {
 }
 
 void Load(const void* table) {
+    // always on: the prompts follow the keyboard or the controller, whichever was used last
+    app::Get().keyboard = true;
     const auto* t = static_cast<const toml::table*>(table);
     std::lock_guard lock(g_lock);
     if (const toml::table* c = (*t)["controls"].as_table()) {
