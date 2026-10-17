@@ -995,7 +995,7 @@ struct Section {
 const Section kSections[] = {
     {"DISPLAY", "Monitor, display mode, resolution, frame rate counter", kDisplay, int(std::size(kDisplay))},
     {"GRAPHICS", "Antialiasing, texture filtering", kGraphics, int(std::size(kGraphics))},
-    {"CONTROLS", "The keys that work controller 1", kKeyboard, int(std::size(kKeyboard))},
+    {"CONTROLS", "Set the keyboard keys for the game's actions", kKeyboard, int(std::size(kKeyboard))},
     {"GENERAL", "Start up, background pause", kGeneral, int(std::size(kGeneral))},
 };
 constexpr int kSectionCount = int(std::size(kSections));
