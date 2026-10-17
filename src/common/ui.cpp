@@ -67,6 +67,19 @@ constexpr float kHelpPx = 23.4f;                       // the font's size in tex
 constexpr float kHelpTexelX = 1.68f, kHelpTexelY = 1.60f;  // frame units a texel, before the widescreen widening
 constexpr float kFontPx = 64;
 
+// --- the game's prompts with the keyboard ---------------------------------------------------------------------
+// With the keyboard used last the game's button prompts (A OK, B BACK...) show its keys: hooks.cpp draws their
+// word without the button and leaves room on its left, where its key is lettered in brackets, as BLACK's port
+// does. A frame's prompts are gathered while the game draws it and shown until the next.
+struct Prompt {
+    float x, y, h;  // the room's left, the prompt's top and height, in the page's 640x480 units
+    uint32_t colour;
+    std::string key;
+};
+std::mutex g_prompt_lock;
+std::vector<Prompt> g_prompts_next, g_prompts;
+constexpr float kPromptScale = 0.6f;  // the prompts' words against the rows' lettering
+
 // --- the game's lettering ------------------------------------------------------------------------------------------
 // The game's menu rows and page titles are sprites of whole words in data\screen\*.xpr (DXT textures): the rows
 // white letters with a black edge, tinted grey or green as the game draws them, the titles orange. Each letter here
@@ -484,6 +497,31 @@ float Lettering(ImDrawList* dl, const Frame& f, float x, float y, ImU32 colour, 
     return w / f.s;
 }
 
+std::string PromptText(const std::string& key) { return "(" + key + ")"; }
+
+// the prompts show keys: the keyboard was used last (STEAL_KEY_PROMPTS=1: as if, for tests)
+bool KeysShown() {
+    static const bool forced = std::getenv("STEAL_KEY_PROMPTS") != nullptr;
+    return forced || input::KeyboardActive();
+}
+
+void PromptsDraw() {
+    std::vector<Prompt> prompts;
+    {
+        std::lock_guard lock(g_prompt_lock);
+        prompts = g_prompts;
+    }
+    if (prompts.empty()) return;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    Frame f = Fit();
+    for (const Prompt& p : prompts) {
+        // as the A and B sprites are placed (measured on OPTIONS at 1080p): their top at 420 is 684.7, 1.46 a texel
+        float x = 720 + (p.x - 320) * PageUnit(), y = 684.7f + (p.y + p.h / 2 - 420) * 1.46f;
+        ImU32 c = IM_COL32((p.colour >> 16) & 0xFF, (p.colour >> 8) & 0xFF, p.colour & 0xFF, p.colour >> 24);
+        Lettering(dl, f, x, y, c, PromptText(p.key), kStart, kPromptScale);
+    }
+}
+
 // a page's title, the game's orange lettering at its left, (x, y) its left edge and middle
 void Title(ImDrawList* dl, const Frame& f, float x, float y, const std::string& s, float alpha = 1) {
     if (!g_title) {
@@ -611,6 +649,7 @@ void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std:
     if (g_button_rects[0] >= 0) {
         ImFontAtlas* atlas = ImGui::GetIO().Fonts;
         float sy = kSpriteTexel, sx = kSpriteTexel * Widen();
+        float keys_room = 0;
         for (int i = 0; i < 2; i++) {
             const Sprite& b = kButtons[i];
             const ImFontAtlasCustomRect* r = atlas->GetCustomRectByIndex(g_button_rects[i]);
@@ -622,6 +661,18 @@ void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std:
             float split = float(kButtonSplit - b.x0), w = float(b.x1 - b.x0);
             float uvx = uv0.x + (uv1.x - uv0.x) * split / w;
             float in = FadeIn(shown, 15);
+            if (KeysShown()) {
+                // as the game's prompts with the keyboard: the key in brackets, then the word, the buttons after
+                // moved right by the keys' room
+                std::string key = PromptText(i ? "ESC" : "ENTER");
+                float room = Lettering(nullptr, f, 0, 0, 0, key + " ", kStart, kPromptScale);
+                float at = left + keys_room;
+                Lettering(dl, f, at, (top + bottom) / 2, Fade(IM_COL32(191, 191, 191, 255), in), key, kStart, kPromptScale);
+                dl->AddImage(atlas->TexID, f.P(at + room, top), f.P(at + room + (w - split) * sx, bottom), {uvx, uv0.y},
+                             uv1, Fade(IM_COL32(191, 191, 191, 255), in));
+                keys_room += room - split * sx;
+                continue;
+            }
             dl->AddImage(atlas->TexID, f.P(left, top), f.P(left + split * sx, bottom), uv0, {uvx, uv1.y},
                          Fade(IM_COL32(220, 220, 220, 255), in));
             dl->AddImage(atlas->TexID, f.P(left + split * sx, top), f.P(left + w * sx, bottom), {uvx, uv0.y}, uv1,
@@ -1162,6 +1213,33 @@ bool HideOptions() { return PageUp() && g_over_game; }
 
 bool TakeOptionsReplay() { return g_replay.exchange(false); }
 
+// a prompt's room in the page's units, 0 with no key for it (the keyboard not used last, or nothing bound)
+float PromptRoom(char button, std::string& key) {
+    if (!KeysShown() || !g_game) return 0;
+    switch (button) {
+        case 'A': key = "ENTER"; break;
+        case 'B': key = "ESC"; break;
+        case 'X': key = input::KeyName(input::Keys()[size_t(input::Control::kX)][0]); break;
+        case 'Y': key = input::KeyName(input::Keys()[size_t(input::Control::kY)][0]); break;
+        default: key.clear();
+    }
+    if (key.empty()) return 0;
+    Frame f{{0, 0}, 1};
+    return Lettering(nullptr, f, 0, 0, 0, PromptText(key) + " ", kStart, kPromptScale) / PageUnit();
+}
+
+void AddPrompt(float x, float y, float h, uint32_t colour, const std::string& key) {
+    std::lock_guard lock(g_prompt_lock);
+    g_prompts_next.push_back({x, y, h, colour, key});
+}
+
+// the game begins a frame: the last one's prompts are the ones shown
+void PromptsFrame() {
+    std::lock_guard lock(g_prompt_lock);
+    g_prompts.swap(g_prompts_next);
+    g_prompts_next.clear();
+}
+
 bool TakeSound(uint32_t& id) {
     std::lock_guard lock(g_sound_lock);
     if (g_sounds.empty()) return false;
@@ -1209,6 +1287,7 @@ void Draw(double fps) {
         app::ApplyDisplay();
     }
     float dark = VeilDarkness();
+    PromptsDraw();
     if (PageUp()) {
         Page();
     } else if (RowUp()) {  // also while the page darkens away, as the game's rows
