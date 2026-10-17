@@ -283,6 +283,9 @@ constexpr int kButtonSplit = 28;          // the sheet's column between a button
 constexpr float kSpriteTexel = 1.46f;     // frame units a texel, before the widescreen widening
 constexpr float kButtonsBottom = 719.7f;  // in the frame
 int g_button_rects[2] = {-1, -1};
+// the page's background (its Bg element): a dark see-through frame, bars and row strips over the whole 640x480 page
+constexpr int kBgX = 384, kBgY = 0, kBgW = 640, kBgH = 480;
+int g_bg_rect = -1;
 
 // before the atlas is built: the letters as glyphs of host (an Arial Black, for anything else); after: their pixels
 struct Placed {
@@ -326,6 +329,15 @@ void AddLettering(ImGuiIO& io, ImFont* rows, ImFont* titles) {
         g_button_rects[i] = io.Fonts->AddCustomRectRegular(img.w, img.h);
         g_placed.push_back({g_button_rects[i], std::move(img)});
     }
+    Image bg;
+    bg.w = kBgW;
+    bg.h = kBgH;
+    bg.rgba.resize(size_t(kBgW) * kBgH * 4);
+    for (int y = 0; y < kBgH; y++)
+        std::memcpy(&bg.rgba[size_t(y) * kBgW * 4], &sheets[0].rgba[(size_t(kBgY + y) * sheets[0].w + kBgX) * 4],
+                    size_t(kBgW) * 4);
+    g_bg_rect = io.Fonts->AddCustomRectRegular(kBgW, kBgH);
+    g_placed.push_back({g_bg_rect, std::move(bg)});
 }
 
 void PlaceLettering(ImGuiIO& io) {
@@ -562,6 +574,17 @@ void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std:
     }
     ImVec2 d = ImGui::GetIO().DisplaySize;
     dl->AddRectFilled({0, 0}, d, IM_COL32(0, 0, 0, 255));
+    if (g_bg_rect >= 0) {
+        // the game's own background over black, on the page as the game places it
+        ImFontAtlas* atlas = ImGui::GetIO().Fonts;
+        ImVec2 uv0, uv1;
+        atlas->CalcCustomRectUV(atlas->GetCustomRectByIndex(g_bg_rect), &uv0, &uv1);
+        constexpr float kBgTop = 177 - 77 * 1.53f - 21.8f;  // its lines where the game's are at 1080p
+        dl->AddImage(atlas->TexID, f.P(720 - 320 * PageUnit(), kBgTop), f.P(720 + 320 * PageUnit(), kBgTop + 480 * 1.53f),
+                     uv0, uv1);
+        Title(dl, f, 152 + slide, 105, title, in);
+        Help(dl, f, help);
+    } else {
     // the diamond weave behind the rows
     for (int r = 0; r < 10; r++)
         for (int c = 0; c < 15; c++) {
@@ -575,6 +598,7 @@ void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std:
     Help(dl, f, help);
     Polyline(dl, f, {{66, 678}, {1372, 678}}, kLine, 2.5f);
     Polyline(dl, f, {{66, 730}, {1372, 730}}, kLine, 2.5f);
+    }
     if (g_button_rects[0] >= 0) {
         ImFontAtlas* atlas = ImGui::GetIO().Fonts;
         float sy = kSpriteTexel, sx = kSpriteTexel * Widen();
@@ -979,9 +1003,10 @@ void OptionsRowDraw() {
     float y = 177 + (g_row_y - 77) * 1.53f;
     bool on = g_row_chosen;
     auto at = [](const std::atomic<int64_t>& t) { return Clock::time_point(Clock::duration(t.load())); };
-    // between CONTROLLER SETTING (35 frames) and RESET TO DEFAULT (40), from 100 units to the left; its light is
-    // its neighbour's (hooks.cpp), coming in and going with the page
+    // between CONTROLLER SETTING (35 frames) and RESET TO DEFAULT (40), from 100 units to the left and from nothing
+    // (the game's rows brighten as the square of the time, measured); going, hooks.cpp darkens it with the page
     double shown = Frames(at(g_row_shown_at));
+    a *= FadeIn(shown, 37.5);
     float x = 720 - 100 * PageUnit() * Left(shown, 37.5);
     ImU32 colour = on ? Mix(kChosen, kFlash, Flash(Frames(at(g_row_chosen_at)))) : kLabel;
     Lettering(dl, f, x, y, Fade(colour, a), "RECOMP SETTINGS", kCentre);
