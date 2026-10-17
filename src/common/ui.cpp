@@ -366,11 +366,29 @@ void Text(ImDrawList* dl, const Frame& f, ImFont* font, float px, float x, float
 // the help line: the game's Arial Bold in orange with a black edge all round
 // the game's help line: its own Arial-like font, wider than Arial Bold by an eighth, drawn small and stretched up so
 // its edges are soft: Arial Bold widened as much, its letters drawn around their place at a share of their light
+// A new help line comes in as the game's (the OPTIONS page's timelines): over 15 frames it slides 100 of the
+// page's units (2.04 frame units each) from the left, slowing as the square of what is left, and brightens from
+// nothing. A line goes again once it was not drawn for a while (its row left).
+double Frames(Clock::time_point since);
+
+float HelpIn(const std::string& s, float& slide) {
+    static std::string last;
+    static Clock::time_point since, drawn;
+    auto now = Clock::now();
+    if (s != last || now - drawn > std::chrono::milliseconds(100)) last = s, since = now;
+    drawn = now;
+    float t = std::min(1.0f, float(Frames(since)) / 15);
+    slide = -204 * (1 - t) * (1 - t);
+    return t;
+}
+
 void Help(ImDrawList* dl, const Frame& f, const std::string& s, float alpha = 1) {
     ImFont* font = g_bold ? g_bold : ImGui::GetFont();
     float size = 32 * f.s, widen = Widen() * 1.13f;
+    float slide;
+    alpha *= HelpIn(s, slide);
     ImVec2 ext = font->CalcTextSizeA(size, FLT_MAX, 0, s.c_str());
-    ImVec2 at = f.P(720, 655);
+    ImVec2 at = f.P(720 + slide, 655);
     at = {at.x - ext.x * widen / 2, at.y - ext.y / 2};
     int first = dl->VtxBuffer.Size;
     float e = 2 * f.s;

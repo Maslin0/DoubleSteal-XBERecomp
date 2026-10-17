@@ -209,7 +209,35 @@ X86_FUNC(sub_0010AB80) {
     uint32_t page = kernel::R32(menu + 0x24);
     bool up = kernel::R32(menu + 0x18) == 1 && page && kernel::R32(page) == kOptionPageVtable;
     if (!up) return;
-    if (page != g_page) g_page = page, g_on_row = false;
+    if (page != g_page) {
+        g_page = page, g_on_row = false;
+        if (std::getenv("STEAL_PAGE_DUMP")) {
+            uint32_t def = kernel::R32(page + 0x10);
+            for (int i = 0; i < int(kernel::R32(def + 4)); i++) {
+                uint32_t el = kernel::R32(kernel::R32(page + 0x14) + i * 4);
+                uint32_t d = kernel::R32(def + 8) + i * 0x24;
+                std::string line;
+                char b[16];
+                for (int k = 0; k < 0x24; k += 4) std::snprintf(b, sizeof(b), " %08X", kernel::R32(d + k)), line += b;
+                line += " |";
+                for (int k = 0; k < 0x40; k += 4) std::snprintf(b, sizeof(b), " %08X", kernel::R32(el + k)), line += b;
+                LOGW("page el %d %s vt %08X:%s", i, static_cast<const char*>(kernel::HostPtr(kernel::R32(d))),
+                     kernel::R32(el), line.c_str());
+            }
+            for (int t = 0; t < int(kernel::R32(def + 0x14)); t++) {
+                uint32_t tl = kernel::R32(def + 0x18) + t * 12;
+                std::string line;
+                char b[64];
+                for (int c = 0; c < int(kernel::R32(tl + 4)); c++) {
+                    uint32_t cmd = kernel::R32(kernel::R32(tl + 8) + c * 4);
+                    line += " [";
+                    for (int k = 0; k < 0x24; k += 4) std::snprintf(b, sizeof(b), "%08X ", kernel::R32(cmd + k)), line += b;
+                    line += "]";
+                }
+                LOGW("page tl %d %08X:%s", t, kernel::R32(tl), line.c_str());
+            }
+        }
+    }
     if (kernel::R32(menu + 0x20) == 0) ui::OptionsShown();
     // an element is drawn while its +0x24 is set; the background (Bg) and the A and B buttons stay
     static std::vector<std::pair<uint32_t, uint8_t>> hidden;
