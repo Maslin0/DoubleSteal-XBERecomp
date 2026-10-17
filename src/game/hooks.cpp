@@ -21,6 +21,7 @@ X86_EXTERN_FUNC(__imp__sub_00177B8E);
 std::chrono::steady_clock::time_point g_last_tick;  // TickScene last ran
 // button prompts in a row this frame: its y, the room their keys took so far (FUN_000EB610)
 std::vector<std::pair<int, float>> g_row_rooms;  // row's y, room so far
+std::vector<std::pair<int, float>> g_row_rooms_last;  // the last frame's, each row's whole
 // the game's state (its frame FUN_00023800's object +0x4C): 9 a race being driven (its countdown too); 1 and 2 a
 // cutscene, 7 a briefing, 8 the start of a mission, 10 the pause menu (logged with STEAL_STATE_LOG=1)
 std::atomic<uint32_t> g_game_state{0};
@@ -294,6 +295,7 @@ constexpr uint32_t kControllerType = 0x1D24EC;
 X86_EXTERN_FUNC(__imp__sub_000123A0);
 X86_FUNC(sub_000123A0) {
     ui::PromptsFrame();
+    g_row_rooms_last.swap(g_row_rooms);
     g_row_rooms.clear();
     // the keys as the game's actions under its controller type; the menus' keys while no race is running
     bool racing = g_game_state == kStateRacing &&
@@ -339,10 +341,18 @@ float RowRoom(int y, float room) {
     g_row_rooms.push_back({y, room});
     return 0;
 }
+// a row's whole room the last frame
+float RowWhole(int y) {
+    for (auto& [ry, sum] : g_row_rooms_last)
+        if (ry == y) return sum;
+    return 0;
+}
 // the button of a prompt element: A, B, X or Y alone or before its word (A_Ok, B_Back under TIME ZONE, A_Continue),
-// 0 for any other element
+// the pause menu's Button (A OK B CONTINUE, its B in kPairs) and M_B (B BACK); 0 for any other element
 char PromptButton(const char* name) {
     if (!name || !name[0]) return 0;
+    if (!std::strcmp(name, "Button")) return 'A';
+    if (!std::strcmp(name, "M_B")) return 'B';
     if (!std::strchr("ABXY", name[0]) || (name[1] && name[1] != '_')) return 0;
     return name[0];
 }
@@ -367,21 +377,64 @@ X86_FUNC(sub_000EA300) {  // thiscall mover (short* x, short* y) -> placed
         U16(px) = uint16_t(g_moved_x + g_shift);
     }
 }
-// a prompt element drawn by imp with sprite (its record in the sheet): without its button, its key lettered there
+// a button in a prompt's sprite: where the button starts and where the word after it does, in texels
+struct Key {
+    char button;
+    int circle, word;
+};
+// sprites with two buttons, by their sheet's width and their row in it (texels, the word from 3 before its pixels):
+// PauseMenu.xpr's A OK B CONTINUE and A JUMP B BACK, ReplayMenu.xpr's A OK B HIDE MENU
+struct Pair {
+    int sheet_w, row;
+    Key keys[2];
+};
+constexpr Pair kPairs[] = {{1024, 210, {{'A', 89, 116}, {'B', 162, 189}}},
+                           {1024, 240, {{'A', 89, 115}, {'B', 187, 214}}},
+                           {256, 126, {{'A', 28, 54}, {'B', 103, 127}}}};
+
+// A prompt element drawn by imp with sprite (its record in the sheet): its words without their buttons, a piece each,
+// the key lettered before each.
 void DrawPrompt(X86Context& ctx, uint8_t* base, void (*imp)(X86Context&, uint8_t*), const char* name, uint32_t sprite) {
     uint32_t el = ctx.ecx;
-    std::string key;
-    float room = 0;
     char button = PromptButton(name);
-    if (button && *static_cast<uint8_t*>(kernel::HostPtr(el + 0x24))) room = ui::PromptRoom(button, key);
-    if (room <= 0) {
+    if (!button || !*static_cast<uint8_t*>(kernel::HostPtr(el + 0x24))) {
         imp(ctx, base);
         return;
     }
-    uint16_t u0 = U16(sprite + 4), w = U16(sprite + 0xC), h = U16(sprite + 0xE);
-    // the button and its gap: a circle a little under the sprite's height (on Options.xpr: 30 high, the word from 28);
-    // beside two rows of words (MISSION SELECT's Y, 60 high) the words from 29 (the C of CLEAR leaning left)
-    uint16_t cut = uint16_t(std::min<int>({h - 2, 29, w - 1}));
+    uint16_t u0 = U16(sprite + 4), v0 = U16(sprite + 6), u1 = U16(sprite + 8), v1 = U16(sprite + 10);
+    uint16_t w = U16(sprite + 0xC), h = U16(sprite + 0xE);
+    // a sprite's u and v are 4096ths of its sheet
+    float upt = float(u1 - u0) / std::max<int>(w, 1), vpt = float(v1 - v0) / std::max<int>(h, 1);
+    Key keys[2];
+    int n = 0;
+    if (upt > 0 && vpt > 0) {
+        int sheet_w = int(std::lround(4096 / upt)), row = int(std::lround(v0 / vpt)), left = int(std::lround(u0 / upt));
+        for (const Pair& p : kPairs)
+            if (p.sheet_w == sheet_w && std::abs(p.row - row) <= 4) {
+                // those within the sprite (M_B is the B BACK of A JUMP B BACK)
+                for (const Key& k : p.keys)
+                    if (k.circle - left >= -3 && k.circle - left < w) keys[n++] = {k.button, std::max(k.circle - left, 0), k.word - left};
+                break;
+            }
+    }
+    // one button: a circle a little under the sprite's height (on Options.xpr: 30 high, the word from 28); beside two
+    // rows of words (MISSION SELECT's Y, 60 high) the words from 29 (the C of CLEAR leaning left)
+    if (!n) keys[n++] = {button, 0, std::min<int>({h - 2, 29, w - 1})};
+    std::string key[2];
+    float room[2], rooms = 0, growth = 0;
+    int start[2], end[2];
+    for (int i = 0, last = 0; i < n; i++) {
+        room[i] = ui::PromptRoom(keys[i].button, key[i]);
+        if (room[i] <= 0) {
+            imp(ctx, base);
+            return;
+        }
+        start[i] = std::clamp(keys[i].word, last, w - 1);
+        end[i] = i + 1 < n ? std::clamp(keys[i + 1].circle - 2, start[i] + 1, int(w)) : w;
+        rooms += room[i];
+        growth += room[i] - (start[i] - last);
+        last = end[i];
+    }
     float& x = *static_cast<float*>(kernel::HostPtr(el + 0x18));
     float y = *static_cast<float*>(kernel::HostPtr(el + 0x1C));
     float at = x;
@@ -392,49 +445,57 @@ void DrawPrompt(X86Context& ctx, uint8_t* base, void (*imp)(X86Context&, uint8_t
     float ay = (anchor & 0xC) == 4 ? 0.5f : (anchor & 0xC) == 8 ? 1.0f : 0.0f;
     uint32_t frame = kernel::R32(ctx.esp + 8);
     uint32_t colour = kernel::CallGuest(ctx, kElementColour, {frame});
-
     if (std::getenv("STEAL_PROMPT_LOG")) {
         static std::vector<std::string> logged;
         if (std::find(logged.begin(), logged.end(), name) == logged.end() && (logged.push_back(name), true))
-            LOGW("prompt %s sprite %08X u0 %u v0 %u u1 %u v1 %u w %u h %u cut %u x %.1f y %.1f anchor %X room %.1f colour %08X el+4 %08X",
-                 name, sprite, u0, U16(sprite + 6), U16(sprite + 8), U16(sprite + 10), w, h, cut, at, y, anchor, room, colour,
-                 kernel::R32(el + 4));
+            LOGW("prompt %s sprite u0 %u v0 %u u1 %u v1 %u w %u h %u keys %d x %.1f y %.1f anchor %X colour %08X", name, u0, v0, u1,
+                 v1, w, h, n, at, y, anchor, colour);
     }
-    // the sprite's u in its own units, a texel being (u1 - u0) / w of them
-    uint16_t ucut = uint16_t((U16(sprite + 8) - u0) * cut / std::max<uint16_t>(w, 1));
-    U16(sprite + 4) = uint16_t(u0 + ucut);
-    U16(sprite + 0xC) = uint16_t(w - cut);
-    // the word, narrower by the button, starts the key's room right of where the sprite started
-    float before = RowRoom(int(y), room);
-    float shift = before + room - ax * cut;
-    x = at + shift;
-    g_shift_mover = kernel::R32(el + 4);
-    g_shift = int(std::lround(shift));
-    g_moved = false;
-    g_drawing_prompt = true;
-    g_prompt_drawn = false;
-    imp(ctx, base);
-    g_drawing_prompt = false;
-    g_shift_mover = 0;
-    x = at;
-    if (g_prompt_drawn && g_prompt_batch) {
+    // prompts side by side move right by the keys before them in their row; a row hung by its middle (TIME ZONE's)
+    // by what they grew, the row then back by its half, by the whole of it the last frame
+    float before = ax > 0 ? RowRoom(int(y), growth) - ax * RowWhole(int(y)) : RowRoom(int(y), rooms);
+    float cursor = at - ax * w + before, key_at[2];
+    X86Context entry = ctx;
+    bool drawn = false, moved = false;
+    int moved_x = 0, moved_y = 0;
+    for (int i = 0; i < n; i++) {
+        key_at[i] = cursor;
+        cursor += room[i];
+        int piece = end[i] - start[i];
+        U16(sprite + 4) = uint16_t(u0 + std::lround(start[i] * upt));
+        U16(sprite + 8) = uint16_t(u0 + std::lround(end[i] * upt));
+        U16(sprite + 0xC) = uint16_t(piece);
+        float shift = cursor + ax * piece - at;
+        x = at + shift;
+        g_shift_mover = kernel::R32(el + 4);
+        g_shift = int(std::lround(shift));
+        g_moved = false;
+        g_drawing_prompt = true;
+        g_prompt_drawn = false;
+        if (i) ctx = entry;
+        imp(ctx, base);
+        g_drawing_prompt = false;
+        g_shift_mover = 0;
+        x = at;
+        if (!i) drawn = g_prompt_drawn, moved = g_moved, moved_x = g_moved_x, moved_y = g_moved_y;
+        cursor += piece;
+    }
+    U16(sprite + 4) = u0;
+    U16(sprite + 8) = u1;
+    U16(sprite + 0xC) = w;
+    if (drawn && g_prompt_batch) {
         float light;
         uint32_t u = kernel::R32(g_prompt_batch + 0x2870);
         std::memcpy(&light, &u, 4);
         light = std::clamp(light, 0.0f, 1.0f);
         colour = (colour & 0x00FFFFFF) | (uint32_t((colour >> 24) * light + 0.5f) << 24);
     }
+    if (!drawn || !(colour >> 24)) return;  // not drawn: its keys neither
+    // placed by its timeline: from there
+    float dx = moved ? float(moved_x) - at : 0, dy = moved ? float(moved_y) - y : 0;
     // a dialog's own prompts (A_Ok, B_Back) are over its backdrop
     bool over = std::strchr(name, '_') != nullptr;
-    if (!g_prompt_drawn || !(colour >> 24)) {
-        // not drawn: its key neither
-    } else if (g_moved) {
-        ui::AddPrompt(float(g_moved_x) - ax * w + before, float(g_moved_y) - ay * h, float(h), colour, key, over);
-    } else {
-        ui::AddPrompt(at - ax * w + before, y - ay * h, float(h), colour, key, over);
-    }
-    U16(sprite + 4) = u0;
-    U16(sprite + 0xC) = w;
+    for (int i = 0; i < n; i++) ui::AddPrompt(key_at[i] + dx, y - ay * h + dy, float(h), colour, key[i], over);
 }
 
 X86_EXTERN_FUNC(__imp__sub_000EB610);
