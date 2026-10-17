@@ -1,4 +1,4 @@
-﻿// Recomp Settings: a page drawn like the game's own OPTIONS screen (F1, or both sticks pressed on pad 1), and the
+﻿// Recomp Settings: a page drawn like the game's own OPTIONS screen (F10, or both sticks pressed on pad 1), and the
 // frame rate counter. Every change is saved to settings.toml at once.
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -32,7 +32,6 @@ extern bool g_filter;
 namespace ui {
 
 bool g_fps_counter = false;
-bool g_vibration = true;
 bool g_skip_intros = false;
 uint32_t g_frame_rate = 30;  // 30 the console's, 60 each step of the game's logic shown
 
@@ -272,6 +271,18 @@ Image CutOut(const Image& sheet, const Cut& c, float slant) {
     return img;
 }
 
+// The A OK and B BACK under a page: the game's own sprites (Options.xpr's first texture), a texel of margin round
+// each, and where the OPTIONS page shows them (measured at 1080p): the left of their pixels in the page's units,
+// their bottom in the frame's
+struct Sprite {
+    int x0, y0, x1, y1;  // in the sheet, the margin included
+    float page_x;        // the left of the pixels in the page's 640 units
+};
+constexpr Sprite kButtons[] = {{2, 422, 60, 448, 24.8f}, {2, 452, 86, 478, 96.5f}};
+constexpr float kSpriteTexel = 1.46f;     // frame units a texel, before the widescreen widening
+constexpr float kButtonsBottom = 719.7f;  // in the frame
+int g_button_rects[2] = {-1, -1};
+
 // before the atlas is built: the letters as glyphs of host (an Arial Black, for anything else); after: their pixels
 struct Placed {
     int rect;
@@ -302,6 +313,18 @@ void AddLettering(ImGuiIO& io, ImFont* rows, ImFont* titles) {
     }
     g_game = rows;
     g_title = titles;
+    for (int i = 0; i < 2; i++) {
+        const Sprite& b = kButtons[i];
+        Image img;
+        img.w = b.x1 - b.x0;
+        img.h = b.y1 - b.y0;
+        img.rgba.resize(size_t(img.w) * img.h * 4);
+        for (int y = 0; y < img.h; y++)
+            std::memcpy(&img.rgba[size_t(y) * img.w * 4], &sheets[0].rgba[(size_t(b.y0 + y) * sheets[0].w + b.x0) * 4],
+                        size_t(img.w) * 4);
+        g_button_rects[i] = io.Fonts->AddCustomRectRegular(img.w, img.h);
+        g_placed.push_back({g_button_rects[i], std::move(img)});
+    }
 }
 
 void PlaceLettering(ImGuiIO& io) {
@@ -370,19 +393,33 @@ void Text(ImDrawList* dl, const Frame& f, ImFont* font, float px, float x, float
 }
 
 double Frames(Clock::time_point since);
+float Widen();
+
+// The game's timelines (the page's description: STEAL_PAGE_DUMP) move an element from one place to another over
+// some frames, eased as a cube (measured on the OPTIONS title, frame by frame), and fade it from nothing to its
+// colour, alpha and colour both, so its light grows as the square of the time
+float Left(double frames, double n) {  // what is left of the way
+    double t = 1 - std::clamp(frames / n, 0.0, 1.0);
+    return float(t * t * t);
+}
+float FadeIn(double frames, double n) {
+    double t = std::clamp(frames / n, 0.0, 1.0);
+    return float(t * t);
+}
+float PageUnit() { return 1.53f * Widen(); }  // frame units of the page's 640 across
 
 // A new help line comes in as the game's (the OPTIONS page's timelines): over 15 frames it slides 100 of the
-// page's units (2.04 frame units each) from the left, slowing as the square of what is left, and brightens from
-// nothing. A line goes again once it was not drawn for a while (its row left).
+// page's units from the left, eased as the game eases its moves (Left), and brightens from nothing. A line goes
+// again once it was not drawn for a while (its row left).
 float HelpIn(const std::string& s, float& slide) {
     static std::string last;
     static Clock::time_point since, drawn;
     auto now = Clock::now();
     if (s != last || now - drawn > std::chrono::milliseconds(100)) last = s, since = now;
     drawn = now;
-    float t = std::min(1.0f, float(Frames(since)) / 15);
-    slide = -204 * (1 - t) * (1 - t);
-    return t;
+    double t = Frames(since);
+    slide = -100 * PageUnit() * Left(t, 15);
+    return float(std::min(1.0, t / 15));
 }
 
 // the help line: the game's Arial Bold in orange with a black edge all round
@@ -458,21 +495,11 @@ void Pointer(ImDrawList* dl, const Frame& f, float x, float y, int dir, float al
 
 double Frames(Clock::time_point since) { return std::chrono::duration<double>(Clock::now() - since).count() * 30; }
 
-// a page's rows come in one after another from the top: the chosen one at once, row i (from 0) eased in over
-// 9 + 5 (i - 1) frames
-float RowIn(double frames, float row, bool chosen) {
-    if (chosen || row <= 0) return 1;
-    float t = float(frames) / (9 + 5 * (row - 1));
-    return std::min(1.0f, t * t);
-}
-
-// a page's title slides in from the left as it brightens: about 200 units out, closing by 22% a frame, its light
-// growing as the square of the time over 11 frames
-float TitleSlide(double frames) { return -204.0f * std::pow(0.78f, float(frames)); }
-float TitleIn(double frames) {
-    float t = std::min(1.0f, float(frames) / 11);
-    return t * t;
-}
+// A page coming up (its first timeline): row i (from 0) comes in over 5 (i + 1) frames, from the left and from
+// nothing to grey; a row of name, colon and value opens out, the name moved 50 of the page's units, the colon 100,
+// the value 150; a row of one word moves 100. The title moves 80 over 20 frames and brightens over 12; the A and B
+// buttons move 65 and 205 over 15.
+double RowFrames(int row) { return 5.0 * (row + 1); }
 
 // the chosen row flashes white every 22 frames, from its choosing, and fades back over 14
 float Flash(double frames) { return std::max(0.0f, 0.95f - float(std::floor(std::fmod(frames, 22))) * 0.068f); }
@@ -517,7 +544,7 @@ void Button(ImDrawList* dl, const Frame& f, float x, ImU32 colour, const char* l
 std::atomic<bool> g_over_game{false};
 
 void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std::string& help, double shown) {
-    float slide = TitleSlide(shown), in = TitleIn(shown);
+    float slide = -80 * PageUnit() * Left(shown, 20), in = FadeIn(shown, 12);
     if (g_over_game) {
         Title(dl, f, 152 + slide, 105, title, in);
         Help(dl, f, help);
@@ -538,8 +565,23 @@ void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std:
     Help(dl, f, help);
     Polyline(dl, f, {{66, 678}, {1372, 678}}, kLine, 2.5f);
     Polyline(dl, f, {{66, 730}, {1372, 730}}, kLine, 2.5f);
-    Button(dl, f, 167, IM_COL32(62, 166, 40, 255), "A", "OK");
-    Button(dl, f, 309, IM_COL32(178, 34, 34, 255), "B", "BACK");
+    if (g_button_rects[0] >= 0) {
+        ImFontAtlas* atlas = ImGui::GetIO().Fonts;
+        float sy = kSpriteTexel, sx = kSpriteTexel * Widen();
+        for (int i = 0; i < 2; i++) {
+            const Sprite& b = kButtons[i];
+            const ImFontAtlasCustomRect* r = atlas->GetCustomRectByIndex(g_button_rects[i]);
+            ImVec2 uv0, uv1;
+            atlas->CalcCustomRectUV(r, &uv0, &uv1);
+            float left = 720 + (b.page_x - 320 - (i ? 205 : 65) * Left(shown, 15)) * sx - sx;
+            float bottom = kButtonsBottom + sy;
+            dl->AddImage(atlas->TexID, f.P(left, bottom - (b.y1 - b.y0) * sy), f.P(left + (b.x1 - b.x0) * sx, bottom),
+                         uv0, uv1, Fade(IM_COL32(220, 220, 220, 255), FadeIn(shown, 15)));  // as dim as the game shows them
+        }
+    } else {
+        Button(dl, f, 167, IM_COL32(62, 166, 40, 255), "A", "OK");
+        Button(dl, f, 309, IM_COL32(178, 34, 34, 255), "B", "BACK");
+    }
 }
 
 // --- what the page holds -------------------------------------------------------------------------------------------
@@ -747,9 +789,6 @@ const Row kGeneral[] = {
     {"PAUSE ON FOCUS LOSS", "The game and its sound stop while the window is in the background",
      [] { return std::string(app::Get().pause_on_focus_loss ? "ON" : "OFF"); },
      [](int dir) { return Flag(app::Get().pause_on_focus_loss, dir); }},
-    {"VIBRATION", "The controller's rumble",
-     [] { return std::string(g_vibration ? "ON" : "OFF"); },
-     [](int dir) { return Flag(g_vibration, dir); }},
 };
 
 struct Section {
@@ -872,13 +911,13 @@ void Page() {
         Chrome(dl, f, "RECOMP SETTINGS", g_row < kSectionCount ? kSections[g_row].help : "Back to the game", shown);
         for (int i = 0; i <= kSectionCount; i++) {
             bool on = i == g_row;
-            float in = RowIn(shown, float(i), on);
+            float in = FadeIn(shown, RowFrames(i)), x = 720 - 100 * PageUnit() * Left(shown, RowFrames(i));
             const char* name = i < kSectionCount ? kSections[i].name : "EXIT";
             float y = 250 + i * 62;
-            float w = Lettering(dl, f, 720, y, Fade(on ? Mix(kChosen, kFlash, flash) : kLabel, in), name, kCentre);
+            float w = Lettering(dl, f, x, y, Fade(on ? Mix(kChosen, kFlash, flash) : kLabel, in), name, kCentre);
             if (on) {
-                Pointer(dl, f, 720 - w / 2 - 36 + spring, y, 1);
-                Pointer(dl, f, 720 + w / 2 + 44 - spring, y, -1);
+                Pointer(dl, f, x - w / 2 - 36 + spring, y, 1, in);
+                Pointer(dl, f, x + w / 2 + 44 - spring, y, -1, in);
             }
         }
         return;
@@ -890,16 +929,17 @@ void Page() {
     float top = 380 - (sec.count - 1) * kPitch / 2;
     for (int i = 0; i < sec.count; i++) {
         bool on = i == g_row;
-        float in = RowIn(shown, float(i), on);
+        float in = FadeIn(shown, RowFrames(i)), out = PageUnit() * Left(shown, RowFrames(i));
         float y = top + i * kPitch;
         // as the game's chosen row: the name green, the colon and value orange, all flashing
         ImU32 name = on ? Mix(kChosen, kFlash, flash) : kLabel, value = on ? Mix(kValueChosen, kFlash, flash) : kLabel;
-        Lettering(dl, f, 640, y, Fade(name, in), sec.rows[i].name, kEnd, kScale);
-        Lettering(dl, f, 674, y, Fade(value, in), ":", kCentre, kScale);
-        float w = Lettering(dl, f, 730, y, Fade(value, in), sec.rows[i].value(), kStart, kScale);
+        float colon = 674 - 100 * out, at = 730 - 150 * out;
+        Lettering(dl, f, 640 - 50 * out, y, Fade(name, in), sec.rows[i].name, kEnd, kScale);
+        Lettering(dl, f, colon, y, Fade(value, in), ":", kCentre, kScale);
+        float w = Lettering(dl, f, at, y, Fade(value, in), sec.rows[i].value(), kStart, kScale);
         if (on) {
-            Pointer(dl, f, 704 + spring, y, -1);
-            Pointer(dl, f, 730 + w + 30 - spring, y, 1);
+            Pointer(dl, f, at - 26 + spring, y, -1, in);
+            Pointer(dl, f, at + w + 30 - spring, y, 1, in);
         }
     }
 }
@@ -915,9 +955,12 @@ void OptionsRowDraw() {
     float y = 177 + (g_row_y - 77) * 1.53f;
     bool on = g_row_chosen;
     auto at = [](const std::atomic<int64_t>& t) { return Clock::time_point(Clock::duration(t.load())); };
-    a *= RowIn(Frames(at(g_row_shown_at)), 6.5f, false);
+    // between CONTROLLER SETTING (35 frames) and RESET TO DEFAULT (40), from 100 units to the left
+    double shown = Frames(at(g_row_shown_at));
+    a *= FadeIn(shown, 37.5);
+    float x = 720 - 100 * PageUnit() * Left(shown, 37.5);
     ImU32 colour = on ? Mix(kChosen, kFlash, Flash(Frames(at(g_row_chosen_at)))) : kLabel;
-    Lettering(dl, f, 720, y, Fade(colour, a), "RECOMP SETTINGS", kCentre);
+    Lettering(dl, f, x, y, Fade(colour, a), "RECOMP SETTINGS", kCentre);
     if (on) Help(dl, f, "Display, graphics and other settings of this port", a);
 }
 
@@ -1006,11 +1049,12 @@ void Draw(double fps) {
     if (g_fps_counter) Counter(fps);
 }
 
-// F1 opens and closes the page; with it up the arrows, Enter and Esc work it
+// F10 opens and closes the page (Windows sends it as a system key); with it up the arrows, Enter and Esc work it
 bool Message(void*, uint32_t msg, uintptr_t wp, intptr_t, intptr_t*) {
-    if (msg != WM_KEYDOWN) return false;
+    if (wp == VK_F10 && (msg == WM_SYSKEYUP || msg == WM_KEYUP)) return true;  // not the window menu
+    if (msg != WM_KEYDOWN && !(msg == WM_SYSKEYDOWN && wp == VK_F10)) return false;
     std::lock_guard lock(app::UiLock());
-    if (wp == VK_F1) {
+    if (wp == VK_F10) {
         if (g_open) Close();
         else Open();
         return true;
@@ -1027,11 +1071,6 @@ bool Message(void*, uint32_t msg, uintptr_t wp, intptr_t, intptr_t*) {
         case VK_BACK: Press(kBack); return true;
     }
     return false;
-}
-
-// the motors stay still with VIBRATION off
-void Rumble(int, uint16_t& left, uint16_t& right) {
-    if (!g_vibration) left = right = 0;
 }
 
 // both sticks pressed open and close it; while it is up pad 1 works it and the game gets nothing
