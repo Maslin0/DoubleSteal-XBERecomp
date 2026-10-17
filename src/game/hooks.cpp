@@ -23,6 +23,7 @@ void OptionsShown();        // the game's OPTIONS page is up this frame: Y there
 void OptionsRow(int y, bool chosen, float alpha);
 void OpenPage();
 bool HideOptions();  // Recomp Settings is drawn over the OPTIONS page: its rows and title go meanwhile
+bool TakeOptionsReplay();  // Recomp Settings closed over the OPTIONS page: the page comes in again
 }
 
 // XMVDecoder_Play(decoder, flags, rect), __stdcall: the library's own player decodes the movie (LOGO1.XMV, the
@@ -239,6 +240,13 @@ X86_FUNC(sub_0010AB80) {
         }
     }
     if (kernel::R32(menu + 0x20) == 0) ui::OptionsShown();
+    // the page's first timeline (page +0x1C: its timelines; +4, +8 their time, +0xC running) brings it in
+    if (ui::TakeOptionsReplay()) {
+        uint32_t tl = kernel::R32(kernel::R32(page + 0x1C));
+        kernel::W32(tl + 4, 0);
+        kernel::W32(tl + 8, 0);
+        *static_cast<uint8_t*>(kernel::HostPtr(tl + 0xC)) = 1;
+    }
     // an element is drawn while its +0x24 is set; the background (Bg) and the A and B buttons stay
     static std::vector<std::pair<uint32_t, uint8_t>> hidden;
     if (ui::HideOptions() && hidden.empty()) {
