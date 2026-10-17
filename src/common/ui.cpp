@@ -543,7 +543,6 @@ Clock::time_point g_chosen_at = Clock::now();  // the chosen row was chosen
 
 // the game's OPTIONS page was up within the last few frames
 std::atomic<int64_t> g_options_seen{0};
-std::atomic<bool> g_seen_controller{false};  // that page was CONTROLLER SETTING, whose background has its picture's frame
 bool OptionsUp() {
     int64_t now = Clock::now().time_since_epoch().count();
     return now - g_options_seen.load() < std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(150)).count();
@@ -555,15 +554,6 @@ std::atomic<bool> g_row_chosen{false};
 std::atomic<float> g_row_alpha{0};
 std::atomic<int64_t> g_row_shown_at{0}, g_row_chosen_at{0};
 std::atomic<int64_t> g_row_seen{0};  // Clock ticks: the OPTIONS page was last drawn, settled or leaving
-// the KEYBOARD row in the game's CONTROLLER SETTING page (hooks.cpp), the same
-std::atomic<int> g_key_y{0};
-std::atomic<bool> g_key_chosen{false};
-std::atomic<float> g_key_alpha{0};
-std::atomic<int64_t> g_key_shown_at{0}, g_key_chosen_at{0}, g_key_seen{0};
-bool KeyRowUp() {
-    int64_t now = Clock::now().time_since_epoch().count();
-    return now - g_key_seen.load() < std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(150)).count();
-}
 std::atomic<bool> g_replay{false};   // the OPTIONS page to come in again (hooks.cpp runs its first timeline)
 bool RowUp() {
     int64_t now = Clock::now().time_since_epoch().count();
@@ -580,11 +570,10 @@ void Button(ImDrawList* dl, const Frame& f, float x, ImU32 colour, const char* l
 // opened from the game's OPTIONS page: drawn over that page's own background, frame and buttons (hooks.cpp hides
 // its rows and title meanwhile)
 std::atomic<bool> g_over_game{false};
-bool g_own_bg = false;  // over the game's page, but with the page's own background (CONTROLLER SETTING's frames)
 
 void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std::string& help, double shown) {
     float slide = -80 * PageUnit() * Left(shown, 20), in = FadeIn(shown, 12);
-    if (g_over_game && !g_own_bg) {
+    if (g_over_game) {
         Title(dl, f, 152 + slide, 105, title, in);
         Help(dl, f, help);
         return;
@@ -961,7 +950,6 @@ void Open() {
     g_row = 0;
     g_capture = -1;
     g_over_game = OptionsUp();
-    g_own_bg = g_over_game && g_seen_controller;
     g_open = true;
     g_veil = Veil::kOpening;
     g_veil_at = Clock::now();
@@ -989,7 +977,7 @@ float VeilDarkness() {
         // back on the OPTIONS page: it comes in again as the game brings a page in, the new row with it
         if (g_over_game) {
             g_replay = true;
-            g_row_shown_at = g_key_shown_at = Clock::now().time_since_epoch().count();
+            g_row_shown_at = Clock::now().time_since_epoch().count();
         }
     }
     t -= kDarken + kBlack;
@@ -1120,33 +1108,6 @@ void OptionsRowDraw() {
     if (on) Help(dl, f, "Display, graphics and other settings of this port", a);
 }
 
-// the KEYBOARD row as CONTROLLER SETTING's rows: name, colon and value, coming in fourth (25 frames) and opening out
-// as they do; its place measured on the page at 1080p (the name's right 614, the colon 659, the value from 736)
-void KeyboardRowDraw() {
-    float a = g_key_alpha;
-    if (a <= 0) return;
-    ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    Frame f = Fit();
-    float y = 177 + (g_key_y - 77) * 1.53f;
-    bool on = g_key_chosen;
-    auto at = [](const std::atomic<int64_t>& t) { return Clock::time_point(Clock::duration(t.load())); };
-    double shown = Frames(at(g_key_shown_at)), chosen = Frames(at(g_key_chosen_at));
-    a *= FadeIn(shown, 25);
-    float out = PageUnit() * Left(shown, 25), flash = Flash(chosen), spring = Spring(chosen);
-    ImU32 name = on ? Mix(kChosen, kFlash, flash) : kLabel, value = on ? Mix(kValueChosen, kFlash, flash) : kLabel;
-    bool keyboard = app::Get().keyboard;
-    float x = 736 - 150 * out;
-    Lettering(dl, f, 614 - 50 * out, y, Fade(name, a), "KEYBOARD", kEnd);
-    Lettering(dl, f, 659 - 100 * out, y, Fade(value, a), ":", kCentre);
-    float w = Lettering(dl, f, x, y, Fade(value, a), keyboard ? "ON" : "OFF", kStart);
-    if (on) {
-        // as the game's ON/OFF rows: an arrow towards the other value only
-        if (keyboard) Pointer(dl, f, x + w + 30 - spring, y, 1, a);
-        else Pointer(dl, f, x - 26 + spring, y, -1, a);
-        Help(dl, f, "Left and right turn the keyboard on and off, OK sets its keys", a);
-    }
-}
-
 void Counter(double fps) {
     char text[32];
     std::snprintf(text, sizeof(text), "FPS: %.1f", fps);
@@ -1175,32 +1136,6 @@ void OptionsRow(int y, bool chosen, float alpha) {
     g_row_alpha = alpha;
 }
 
-void KeyboardRow(int y, bool chosen, float alpha) {
-    int64_t now = Clock::now().time_since_epoch().count();
-    static int64_t last = 0;
-    if (now - last > std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(150)).count()) g_key_shown_at = now;
-    last = now;
-    if (chosen && !g_key_chosen) g_key_chosen_at = now;
-    g_key_seen = now;
-    g_key_y = y;
-    g_key_chosen = chosen;
-    g_key_alpha = alpha;
-}
-
-bool StepKeyboard(int dir) {
-    std::lock_guard lock(app::UiLock());
-    if (!Flag(app::Get().keyboard, dir)) return false;
-    app::Save();
-    return true;
-}
-
-void OpenKeys() {
-    std::lock_guard lock(app::UiLock());
-    Open();
-    for (int i = 0; i < kSectionCount; i++)
-        if (kSections[i].rows == kKeyboard) g_section = i, g_row = 1;  // the first control's row
-}
-
 void OpenPage() {
     std::lock_guard lock(app::UiLock());
     Open();
@@ -1210,10 +1145,7 @@ bool HideOptions() { return PageUp() && g_over_game; }
 
 bool TakeOptionsReplay() { return g_replay.exchange(false); }
 
-void OptionsShown(bool controller) {
-    g_options_seen = Clock::now().time_since_epoch().count();
-    g_seen_controller = controller;
-}
+void OptionsShown() { g_options_seen = Clock::now().time_since_epoch().count(); }
 
 void Window(void*) {
     std::lock_guard lock(app::UiLock());
@@ -1254,8 +1186,6 @@ void Draw(double fps) {
     float dark = VeilDarkness();
     if (PageUp()) {
         Page();
-    } else if (KeyRowUp()) {
-        KeyboardRowDraw();
     } else if (RowUp()) {  // also while the page darkens away, as the game's rows
         OptionsRowDraw();
     }

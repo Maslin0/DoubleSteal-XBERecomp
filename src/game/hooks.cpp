@@ -18,16 +18,12 @@ X86_EXTERN_FUNC(__imp__sub_00177B8E);
 
 namespace ui {
 extern bool g_skip_intros;  // Recomp Settings > GENERAL > SKIP INTROS
-void OptionsShown(bool controller);  // OPTIONS or CONTROLLER SETTING is up this frame: Y there opens Recomp Settings
+void OptionsShown();        // the game's OPTIONS page is up this frame: Y there opens Recomp Settings
 // the RECOMP SETTINGS row put into the OPTIONS page: its y in the page's units, chosen, the page's fade
 void OptionsRow(int y, bool chosen, float alpha);
 void OpenPage();
 bool HideOptions();  // Recomp Settings is drawn over the OPTIONS page: its rows and title go meanwhile
 bool TakeOptionsReplay();  // Recomp Settings closed over the OPTIONS page: the page comes in again
-// the KEYBOARD row put into the CONTROLLER SETTING page, as OptionsRow
-void KeyboardRow(int y, bool chosen, float alpha);
-bool StepKeyboard(int dir);  // the keyboard on (1) or off (-1); false when it already was
-void OpenKeys();             // Recomp Settings at its CONTROLS
 }
 
 // XMVDecoder_Play(decoder, flags, rect), __stdcall: the library's own player decodes the movie (LOGO1.XMV, the
@@ -157,22 +153,6 @@ uint32_t Element(uint32_t page, const char* name, int* index = nullptr) {
 uint32_t g_page = 0;
 bool g_on_row = false;
 
-// KEYBOARD as a row of the game's CONTROLLER SETTING page, under CONTROLLER TYPE, the same way: its three rows moved
-// closer (30 apart to 25, from 79 to 74), the cursor through the new row, the row drawn by ui.cpp
-constexpr uint32_t kControllerPageVtable = 0x001CA8C4;
-constexpr int kCtlY0 = 79, kCtlStep = 30, kCtlNewY0 = 74, kCtlNewStep = 25, kCtlRows = 3;
-uint32_t g_ctl_page = 0;
-bool g_on_key_row = false;
-
-bool CtlY(uint16_t& y) {
-    for (int r = 0; r < kCtlRows; r++)
-        if (y == kCtlY0 + r * kCtlStep) {
-            y = uint16_t(kCtlNewY0 + r * kCtlNewStep);
-            return true;
-        }
-    return false;
-}
-
 // a row's y in the new layout: the rows from the new one down one place, all of them closer
 bool NewY(uint16_t& y) {
     for (int r = 0; r < kRows; r++)
@@ -187,19 +167,19 @@ bool NewY(uint16_t& y) {
 // each description once: it outlives the page. def: the page's description, +4 its elements, +8 theirs (0x24
 // each, y at +0xC); +0x14 its timelines, +0x18 theirs (12 bytes, +8 their commands). A move command (type 3) holds
 // where it takes its element from and to (x, y at +0x18, +0x1A and +0x1C, +0x1E), which the element keeps after.
-void Relayout(uint32_t def, bool (*new_y)(uint16_t&)) {
+void Relayout(uint32_t def) {
     static std::vector<uint32_t> done;
     if (std::find(done.begin(), done.end(), def) != done.end()) return;
     done.push_back(def);
-    for (int i = 0; i < int(kernel::R32(def + 4)); i++) new_y(U16(kernel::R32(def + 8) + i * 0x24 + 0xC));
+    for (int i = 0; i < int(kernel::R32(def + 4)); i++) NewY(U16(kernel::R32(def + 8) + i * 0x24 + 0xC));
     for (int t = 0; t < int(kernel::R32(def + 0x14)); t++) {
         uint32_t tl = kernel::R32(def + 0x18) + t * 12;  // +4 its commands, +8 pointers to them
         for (int c = 0; c < int(kernel::R32(tl + 4)); c++) {
             uint32_t cmd = kernel::R32(kernel::R32(tl + 8) + c * 4);
             uint32_t type = kernel::R32(cmd);
             if (type != 3 || kernel::R32(cmd + 0xC) != 0) continue;  // moves of the page's own elements
-            new_y(U16(cmd + 0x1A));
-            new_y(U16(cmd + 0x1E));
+            NewY(U16(cmd + 0x1A));
+            NewY(U16(cmd + 0x1E));
         }
     }
 }
@@ -221,56 +201,45 @@ void Sound(X86Context& ctx, uint32_t id) {
 }
 }  // namespace
 
-// STEAL_PAGE_DUMP=1 (+ XBE_VERBOSE=1): a page's elements (description, then the element) and timelines' commands
-void DumpPage(uint32_t page) {
-    uint32_t def = kernel::R32(page + 0x10);
-    LOGW("page %08X vt %08X: %u elements, %u timelines", page, kernel::R32(page), kernel::R32(def + 4), kernel::R32(def + 0x14));
-    for (int i = 0; i < int(kernel::R32(def + 4)); i++) {
-        uint32_t el = kernel::R32(kernel::R32(page + 0x14) + i * 4);
-        uint32_t d = kernel::R32(def + 8) + i * 0x24;
-        std::string line;
-        char b[16];
-        for (int k = 0; k < 0x24; k += 4) std::snprintf(b, sizeof(b), " %08X", kernel::R32(d + k)), line += b;
-        line += " |";
-        for (int k = 0; k < 0x40; k += 4) std::snprintf(b, sizeof(b), " %08X", kernel::R32(el + k)), line += b;
-        LOGW("page el %d %s vt %08X:%s", i, static_cast<const char*>(kernel::HostPtr(kernel::R32(d))), kernel::R32(el),
-             line.c_str());
-    }
-    for (int t = 0; t < int(kernel::R32(def + 0x14)); t++) {
-        uint32_t tl = kernel::R32(def + 0x18) + t * 12;
-        std::string line;
-        char b[64];
-        for (int c = 0; c < int(kernel::R32(tl + 4)); c++) {
-            uint32_t cmd = kernel::R32(kernel::R32(tl + 8) + c * 4);
-            line += " [";
-            for (int k = 0; k < 0x24; k += 4) std::snprintf(b, sizeof(b), "%08X ", kernel::R32(cmd + k)), line += b;
-            line += "]";
-        }
-        LOGW("page tl %d %08X:%s", t, kernel::R32(tl), line.c_str());
-    }
-}
-
 // The options menu, each frame it is up (main menu and pause menu): +0x18 the page shown (1 OPTIONS, 3 CONTROLLER
 // SETTING), +0x20 its change (0 settled, 2 leaving), +0x24 the OPTIONS page.
 X86_EXTERN_FUNC(__imp__sub_0010AB80);
 X86_FUNC(sub_0010AB80) {
     uint32_t menu = ctx.ecx;
     __imp__sub_0010AB80(ctx, base);
-    // OPTIONS (+0x18 1, the page at +0x24) or CONTROLLER SETTING (3, at +0x28)
-    uint32_t shown = kernel::R32(menu + 0x18);
-    uint32_t page = shown == 1 ? kernel::R32(menu + 0x24) : shown == 3 ? kernel::R32(menu + 0x28) : 0;
-    uint32_t vt = page ? kernel::R32(page) : 0;
-    bool options = vt == kOptionPageVtable, controller = vt == kControllerPageVtable;
-    if (!options && !controller) return;
-    if (options && page != g_page) {
+    uint32_t page = kernel::R32(menu + 0x24);
+    bool up = kernel::R32(menu + 0x18) == 1 && page && kernel::R32(page) == kOptionPageVtable;
+    if (!up) return;
+    if (page != g_page) {
         g_page = page, g_on_row = false;
-        if (std::getenv("STEAL_PAGE_DUMP")) DumpPage(page);
+        if (std::getenv("STEAL_PAGE_DUMP")) {
+            uint32_t def = kernel::R32(page + 0x10);
+            for (int i = 0; i < int(kernel::R32(def + 4)); i++) {
+                uint32_t el = kernel::R32(kernel::R32(page + 0x14) + i * 4);
+                uint32_t d = kernel::R32(def + 8) + i * 0x24;
+                std::string line;
+                char b[16];
+                for (int k = 0; k < 0x24; k += 4) std::snprintf(b, sizeof(b), " %08X", kernel::R32(d + k)), line += b;
+                line += " |";
+                for (int k = 0; k < 0x40; k += 4) std::snprintf(b, sizeof(b), " %08X", kernel::R32(el + k)), line += b;
+                LOGW("page el %d %s vt %08X:%s", i, static_cast<const char*>(kernel::HostPtr(kernel::R32(d))),
+                     kernel::R32(el), line.c_str());
+            }
+            for (int t = 0; t < int(kernel::R32(def + 0x14)); t++) {
+                uint32_t tl = kernel::R32(def + 0x18) + t * 12;
+                std::string line;
+                char b[64];
+                for (int c = 0; c < int(kernel::R32(tl + 4)); c++) {
+                    uint32_t cmd = kernel::R32(kernel::R32(tl + 8) + c * 4);
+                    line += " [";
+                    for (int k = 0; k < 0x24; k += 4) std::snprintf(b, sizeof(b), "%08X ", kernel::R32(cmd + k)), line += b;
+                    line += "]";
+                }
+                LOGW("page tl %d %08X:%s", t, kernel::R32(tl), line.c_str());
+            }
+        }
     }
-    if (controller && page != g_ctl_page) {
-        g_ctl_page = page, g_on_key_row = false;
-        if (std::getenv("STEAL_PAGE_DUMP")) DumpPage(page);
-    }
-    if (kernel::R32(menu + 0x20) == 0) ui::OptionsShown(controller);
+    if (kernel::R32(menu + 0x20) == 0) ui::OptionsShown();
     // the page's first timeline (page +0x1C: its timelines; +4, +8 their time, +0xC running) brings it in
     if (ui::TakeOptionsReplay()) {
         uint32_t tl = kernel::R32(kernel::R32(page + 0x1C));
@@ -299,62 +268,12 @@ X86_FUNC(sub_0010AB80) {
     static int leaving = 0;
     leaving = kernel::R32(menu + 0x20) == 2 ? leaving + 1 : 0;
     float light = std::max(0.0f, 1 - leaving / 8.0f);
-    if (options) ui::OptionsRow(kRowY0 + kNewRow * kNewStep, g_on_row, light);
-    else ui::KeyboardRow(kCtlNewY0 + kCtlRows * kCtlNewStep, g_on_key_row, light);
+    ui::OptionsRow(kRowY0 + kNewRow * kNewStep, g_on_row, light);
 }
 
 X86_EXTERN_FUNC(__imp__sub_000EBD00);
-namespace {
-// CONTROLLER SETTING's input with the KEYBOARD row: onto it down from CONTROLLER TYPE or up from VIBRATION; on it
-// left and right turn the keyboard off and on, OK opens Recomp Settings at its CONTROLS
-void KeyboardRowInput(X86Context& ctx, uint8_t* base, uint32_t page, uint32_t buttons) {
-    constexpr uint32_t kUp = 1, kDown = 2, kLeft = 4, kRight = 8;
-    int vibration = -1, type = -1;
-    uint32_t vibration_el = Element(page, "Vibration", &vibration);
-    uint32_t type_el = Element(page, "ControllerType", &type);
-    int chosen = int(kernel::R32(page + 0x24));
-    if (!vibration_el || !type_el) {
-        __imp__sub_000EBD00(ctx, base);
-        return;
-    }
-    if (!g_on_key_row) {
-        if ((chosen == type && (buttons & kDown)) || (chosen == vibration && (buttons & kUp))) {
-            Highlight(ctx, page, chosen == type ? type_el : vibration_el, chosen, false);
-            g_on_key_row = true;
-            Sound(ctx, kCursorSound);
-            kernel::Return(ctx, 0, 1);
-            return;
-        }
-        __imp__sub_000EBD00(ctx, base);
-        return;
-    }
-    if (buttons & (kUp | kDown)) {
-        bool down = buttons & kDown;
-        uint32_t el = down ? vibration_el : type_el;
-        int index = down ? vibration : type;
-        kernel::W32(page + 0x24, uint32_t(index));
-        Highlight(ctx, page, el, index, true);
-        g_on_key_row = false;
-        Sound(ctx, kCursorSound);
-    } else if (buttons & (kLeft | kRight)) {
-        if (ui::StepKeyboard(buttons & kRight ? 1 : -1)) Sound(ctx, kCursorSound);
-    } else if (buttons & kernel::R32(page + 0x44)) {
-        Sound(ctx, kOkSound);
-        ui::OpenKeys();
-    } else if (buttons & kernel::R32(page + 0x48)) {
-        g_on_key_row = false;
-        __imp__sub_000EBD00(ctx, base);  // back, as from any row
-        return;
-    }
-    kernel::Return(ctx, 0, 1);
-}
-}  // namespace
 X86_FUNC(sub_000EBD00) {
     uint32_t page = ctx.ecx, buttons = kernel::R32(ctx.esp + 4);
-    if (page == g_ctl_page && kernel::R32(page) == kControllerPageVtable && buttons) {
-        KeyboardRowInput(ctx, base, page, buttons);
-        return;
-    }
     if (page != g_page || kernel::R32(page) != kOptionPageVtable || !buttons) {
         __imp__sub_000EBD00(ctx, base);
         return;
@@ -403,8 +322,7 @@ X86_FUNC(sub_000EBD00) {
 // a page set up from its description (thiscall page (description, xpr)): the elements take their places from it here
 X86_EXTERN_FUNC(__imp__sub_000EC4D0);
 X86_FUNC(sub_000EC4D0) {
-    if (kernel::R32(ctx.ecx) == kOptionPageVtable) Relayout(kernel::R32(ctx.esp + 4), NewY);
-    if (kernel::R32(ctx.ecx) == kControllerPageVtable) Relayout(kernel::R32(ctx.esp + 4), CtlY);
+    if (kernel::R32(ctx.ecx) == kOptionPageVtable) Relayout(kernel::R32(ctx.esp + 4));
     __imp__sub_000EC4D0(ctx, base);
 }
 
