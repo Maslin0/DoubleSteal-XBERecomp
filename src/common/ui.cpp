@@ -78,6 +78,7 @@ struct Prompt {
 };
 std::mutex g_prompt_lock;
 std::vector<Prompt> g_prompts_next, g_prompts;
+Clock::time_point g_prompts_at;  // the game frame that drew them began: a loading screen's loop runs no such frames
 constexpr float kPromptScale = 0.6f;  // the prompts' words against the rows' lettering
 constexpr int kPromptGrey = 166;      // the prompts' words' grey
 
@@ -510,7 +511,7 @@ void PromptsDraw() {
     std::vector<Prompt> prompts;
     {
         std::lock_guard lock(g_prompt_lock);
-        prompts = g_prompts;
+        if (Clock::now() - g_prompts_at < std::chrono::milliseconds(100)) prompts = g_prompts;
     }
     if (prompts.empty()) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
@@ -1254,6 +1255,7 @@ void PromptsFrame() {
     std::lock_guard lock(g_prompt_lock);
     g_prompts.swap(g_prompts_next);
     g_prompts_next.clear();
+    g_prompts_at = Clock::now();
 }
 
 bool TakeSound(uint32_t& id) {
