@@ -263,7 +263,19 @@ X86_FUNC(sub_0010AB80) {
         for (auto& [el, shown] : hidden) *static_cast<uint8_t*>(kernel::HostPtr(el + 0x24)) = shown;
         hidden.clear();
     }
-    ui::OptionsRow(kRowY0 + kNewRow * kNewStep, g_on_row, std::min(1.0f, int(kernel::R32(page + 0x3C)) / 256.0f));
+    // the row's light: its neighbour RESET TO DEFAULT's (element +0x20 its colour now), which the page's timelines
+    // fade in from nothing
+    float light = 1;
+    if (uint32_t reset = Element(page, "ResetDefault")) {
+        uint32_t c = kernel::R32(reset + 0x20);
+        light = std::min({1.0f, float(c >> 24) / 255.0f, float((c >> 8) & 0xFF) / 128.0f});
+    }
+    // leaving (the menu's change state 2) the game's rows darken to nothing over 8 frames, evenly (measured): the row
+    // with them; their colours and the page's fade stay as they were meanwhile
+    static int leaving = 0;
+    leaving = kernel::R32(menu + 0x20) == 2 ? leaving + 1 : 0;
+    light = std::min(light, std::max(0.0f, 1 - leaving / 8.0f));
+    ui::OptionsRow(kRowY0 + kNewRow * kNewStep, g_on_row, light);
 }
 
 X86_EXTERN_FUNC(__imp__sub_000EBD00);

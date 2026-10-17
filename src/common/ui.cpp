@@ -446,15 +446,18 @@ void Help(ImDrawList* dl, const Frame& f, const std::string& s, float alpha = 1)
 
 // a row's words in the game's own lettering at (x, y) = its left, centre or right edge and the middle of its letters
 // (Arial Black slanted without it); returns its width in the frame's units
+// fit: the widest it may be in the frame's units (0: any), squeezed across past it
 float Lettering(ImDrawList* dl, const Frame& f, float x, float y, ImU32 colour, const std::string& s, Align align = kStart,
-                float scale = 1) {
+                float scale = 1, float fit = 0) {
     if (!g_game) {
         float w = (g_heavy ? g_heavy : ImGui::GetFont())->CalcTextSizeA(38 * scale * f.s, FLT_MAX, 0, s.c_str()).x / f.s;
         if (dl) Text(dl, f, g_heavy, 38 * scale, x, y, colour, s, align);
         return w;
     }
     float size = kCell * kTexel * scale * f.s, widen = Widen();
-    float w = g_game->CalcTextSizeA(size, FLT_MAX, 0, s.c_str()).x * widen;
+    float raw = g_game->CalcTextSizeA(size, FLT_MAX, 0, s.c_str()).x;
+    if (fit > 0 && raw * widen > fit * f.s) widen = fit * f.s / raw;
+    float w = raw * widen;
     if (!dl) return w / f.s;
     ImVec2 at = f.P(x, y);
     at.y -= (kRows.top + kRows.band / 2) * kTexel * scale * f.s;
@@ -954,9 +957,10 @@ void Page() {
         // as the game's chosen row: the name green, the colon and value orange, all flashing
         ImU32 name = on ? Mix(kChosen, kFlash, flash) : kLabel, value = on ? Mix(kValueChosen, kFlash, flash) : kLabel;
         float colon = 674 - 100 * out, at = 730 - 150 * out;
-        Lettering(dl, f, 640 - 50 * out, y, Fade(name, in), sec.rows[i].name, kEnd, kScale);
+        // inside the diamond weave (x 215 to 1261): names from 230, values to 1200 with the arrow after
+        Lettering(dl, f, 640 - 50 * out, y, Fade(name, in), sec.rows[i].name, kEnd, kScale, 640 - 230);
         Lettering(dl, f, colon, y, Fade(value, in), ":", kCentre, kScale);
-        float w = Lettering(dl, f, at, y, Fade(value, in), sec.rows[i].value(), kStart, kScale);
+        float w = Lettering(dl, f, at, y, Fade(value, in), sec.rows[i].value(), kStart, kScale, 1200 - 730);
         if (on) {
             Pointer(dl, f, at - 26 + spring, y, -1, in);
             Pointer(dl, f, at + w + 30 - spring, y, 1, in);
@@ -975,9 +979,9 @@ void OptionsRowDraw() {
     float y = 177 + (g_row_y - 77) * 1.53f;
     bool on = g_row_chosen;
     auto at = [](const std::atomic<int64_t>& t) { return Clock::time_point(Clock::duration(t.load())); };
-    // between CONTROLLER SETTING (35 frames) and RESET TO DEFAULT (40), from 100 units to the left
+    // between CONTROLLER SETTING (35 frames) and RESET TO DEFAULT (40), from 100 units to the left; its light is
+    // its neighbour's (hooks.cpp), coming in and going with the page
     double shown = Frames(at(g_row_shown_at));
-    a *= FadeIn(shown, 37.5);
     float x = 720 - 100 * PageUnit() * Left(shown, 37.5);
     ImU32 colour = on ? Mix(kChosen, kFlash, Flash(Frames(at(g_row_chosen_at)))) : kLabel;
     Lettering(dl, f, x, y, Fade(colour, a), "RECOMP SETTINGS", kCentre);
