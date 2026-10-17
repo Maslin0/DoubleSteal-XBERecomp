@@ -507,6 +507,12 @@ void Pointer(ImDrawList* dl, const Frame& f, float x, float y, int dir, float al
     dl->AddTriangleFilled(f.P(x - w, y - h), f.P(x + w, y), f.P(x - w, y + h), Fade(kArrow, alpha));
 }
 
+// a list's arrow above (dir -1) or below (1) its rows while there is more of it that way
+void Arrow(ImDrawList* dl, const Frame& f, float x, float y, int dir, float alpha = 1) {
+    float w = 13, h = 10 * dir;
+    dl->AddTriangleFilled(f.P(x - w, y - h), f.P(x + w, y - h), f.P(x, y + h), Fade(kArrow, alpha));
+}
+
 // --- the game's animations, measured on its OPTIONS page (30 frames a second) --------------------------------------
 
 double Frames(Clock::time_point since) { return std::chrono::duration<double>(Clock::now() - since).count() * 30; }
@@ -631,6 +637,7 @@ struct Row {
     const char* help;
     std::string (*value)();
     bool (*step)(int dir);  // -1 or +1; false when the value is already at that end
+    bool keys = false;  // a control's keys: OK waits for one
 };
 
 struct Display {
@@ -831,6 +838,74 @@ const Row kGeneral[] = {
      [](int dir) { return Flag(app::Get().pause_on_focus_loss, dir); }},
 };
 
+// KEYBOARD: whether the keyboard works controller 1, a row for each of the controller's controls with its keys, and
+// the keys back as they were. On a control's row OK waits for a key and sets it, right waits for a second one and
+// left takes the second off; Esc (or B) leaves the waiting.
+int g_capture = -1;       // the control waiting for a key
+int g_capture_slot = 0;   // its first key or its second
+Clock::time_point g_capture_at;
+
+template <int C>
+std::string Keys() {
+    if (g_capture == C) return "PRESS A KEY";
+    const auto& k = input::Keys()[C];
+    std::string first = input::KeyName(k[0]), second = input::KeyName(k[1]);
+    if (first.empty()) first.swap(second);
+    if (first.empty()) return "NONE";
+    return second.empty() ? first : first + ", " + second;
+}
+template <int C>
+bool KeyStep(int dir) {
+    if (dir < 0) {  // the second key off
+        auto& k = input::Keys()[C];
+        if (!k[1]) return false;
+        k[1] = 0;
+        return true;
+    }
+    g_capture = C;
+    g_capture_slot = dir > 1 ? 0 : 1;  // OK (2) the first, right (1) the second
+    g_capture_at = Clock::now();
+    return false;
+}
+#define KEY_ROW(name, c) {name, "OK sets its key, right adds a second, left takes the second off", Keys<c>, KeyStep<c>, true}
+
+const Row kKeyboard[] = {
+    {"KEYBOARD", "The keyboard works controller 1 while the game window has the focus",
+     [] { return std::string(app::Get().keyboard ? "ON" : "OFF"); },
+     [](int dir) { return Flag(app::Get().keyboard, dir); }},
+    KEY_ROW("LEFT STICK LEFT", 0),
+    KEY_ROW("LEFT STICK RIGHT", 1),
+    KEY_ROW("LEFT STICK UP", 2),
+    KEY_ROW("LEFT STICK DOWN", 3),
+    KEY_ROW("RIGHT TRIGGER", 4),
+    KEY_ROW("LEFT TRIGGER", 5),
+    KEY_ROW("A", 6),
+    KEY_ROW("B", 7),
+    KEY_ROW("X", 8),
+    KEY_ROW("Y", 9),
+    KEY_ROW("BLACK", 10),
+    KEY_ROW("WHITE", 11),
+    KEY_ROW("START", 12),
+    KEY_ROW("BACK", 13),
+    KEY_ROW("D-PAD UP", 14),
+    KEY_ROW("D-PAD DOWN", 15),
+    KEY_ROW("D-PAD LEFT", 16),
+    KEY_ROW("D-PAD RIGHT", 17),
+    KEY_ROW("RIGHT STICK UP", 18),
+    KEY_ROW("RIGHT STICK DOWN", 19),
+    KEY_ROW("RIGHT STICK LEFT", 20),
+    KEY_ROW("RIGHT STICK RIGHT", 21),
+    KEY_ROW("LEFT THUMB", 22),
+    KEY_ROW("RIGHT THUMB", 23),
+    {"RESET KEYS", "All the keys back as they were at first", [] { return std::string(); },
+     [](int dir) {
+         if (dir <= 0 || input::Keys() == input::DefaultKeys()) return false;
+         input::Keys() = input::DefaultKeys();
+         return true;
+     }},
+};
+#undef KEY_ROW
+
 struct Section {
     const char* name;
     const char* help;
@@ -840,6 +915,7 @@ struct Section {
 const Section kSections[] = {
     {"DISPLAY", "Monitor, display mode, resolution, frame rate counter", kDisplay, int(std::size(kDisplay))},
     {"GRAPHICS", "Antialiasing, texture filtering", kGraphics, int(std::size(kGraphics))},
+    {"CONTROLS", "The keys that work controller 1", kKeyboard, int(std::size(kKeyboard))},
     {"GENERAL", "Start up, background pause", kGeneral, int(std::size(kGeneral))},
 };
 constexpr int kSectionCount = int(std::size(kSections));
@@ -849,6 +925,7 @@ std::atomic<bool> g_open{false};
 bool g_swallow = false;  // closed from the pad: the game sees nothing until every button is let go
 int g_section = -1;  // -1: the list of sections
 int g_row = 0;
+int g_first = 0;  // a long list's first row shown
 
 // --- input ---------------------------------------------------------------------------------------------------------
 
@@ -871,6 +948,7 @@ bool PageUp() { return g_open && !(g_veil == Veil::kOpening && Frames(g_veil_at)
 void Open() {
     g_section = -1;
     g_row = 0;
+    g_capture = -1;
     g_over_game = OptionsUp();
     g_open = true;
     g_veil = Veil::kOpening;
@@ -881,6 +959,7 @@ void Open() {
 // the page goes once darkened (Draw)
 void Close() {
     if (g_veil == Veil::kClosing) return;
+    g_capture = -1;
     g_veil = Veil::kClosing;
     g_veil_at = Clock::now();
     g_swallow = true;
@@ -911,6 +990,10 @@ void Turn(Key k, int rows);
 
 void Press(Key k) {
     if (g_veil != Veil::kNone) return;  // not while the page comes or goes
+    if (g_capture >= 0) {  // waiting for a key: B leaves it
+        if (k == kBack) g_capture = -1;
+        return;
+    }
     int rows = g_section < 0 ? kSectionCount + 1 : kSections[g_section].count;
     int section = g_section, row = g_row;
     Turn(k, rows);
@@ -930,6 +1013,8 @@ void Turn(Key k, int rows) {
             if (g_section < 0) {
                 if (g_row == kSectionCount) Close();
                 else g_section = g_row, g_row = 0;
+            } else if (kSections[g_section].rows[g_row].keys) {
+                kSections[g_section].rows[g_row].step(2);  // waits for its first key
             } else {
                 // A moves the value on, from the last back to the first
                 const Row& r = kSections[g_section].rows[g_row];
@@ -941,7 +1026,7 @@ void Turn(Key k, int rows) {
             break;
         case kBack:
             if (g_section < 0) Close();
-            else g_row = g_section, g_section = -1;
+            else g_row = g_section, g_section = -1, g_first = 0;
             break;
         default: break;
     }
@@ -971,13 +1056,23 @@ void Page() {
     }
     const Section& sec = kSections[g_section];
     Chrome(dl, f, sec.name, sec.rows[g_row].help, shown);
-    // the rows a little smaller than the game's, for the longer names and values; around the page's middle
+    // the rows a little smaller than the game's, for the longer names and values; around the page's middle. A longer
+    // list shows kShown rows at a time, moved along with the cursor, arrows above and below while there is more
     constexpr float kScale = 0.9f, kPitch = 46;
-    float top = 380 - (sec.count - 1) * kPitch / 2;
-    for (int i = 0; i < sec.count; i++) {
+    constexpr int kShown = 10;
+    int shown_rows = std::min(sec.count, kShown);
+    g_first = std::clamp(g_first, std::max(0, g_row - kShown + 1), std::min(g_row, sec.count - shown_rows));
+    float top = 380 - (shown_rows - 1) * kPitch / 2;
+    float more = FadeIn(shown, RowFrames(0));
+    if (g_first > 0) Arrow(dl, f, 720, top - kPitch * 0.75f, -1, more);
+    if (g_first + shown_rows < sec.count) Arrow(dl, f, 720, top + (shown_rows - 0.25f) * kPitch, 1, more);
+    for (int i = g_first; i < g_first + shown_rows; i++) {
         bool on = i == g_row;
-        float in = FadeIn(shown, RowFrames(i)), out = PageUnit() * Left(shown, RowFrames(i));
-        float y = top + i * kPitch;
+        int place = i - g_first;
+        float in = FadeIn(shown, RowFrames(place)), out = PageUnit() * Left(shown, RowFrames(place));
+        float y = top + place * kPitch;
+        // a key awaited: its row's value blinks
+        if (on && g_capture >= 0) in *= 0.55f + 0.45f * float(std::cos(Frames(g_capture_at) * 0.4));
         // as the game's chosen row: the name green, the colon and value orange, all flashing
         ImU32 name = on ? Mix(kChosen, kFlash, flash) : kLabel, value = on ? Mix(kValueChosen, kFlash, flash) : kLabel;
         float colon = 674 - 100 * out, at = 730 - 150 * out;
@@ -1102,7 +1197,27 @@ void Draw(double fps) {
 }
 
 // F10 opens and closes the page (Windows sends it as a system key); with it up the arrows, Enter and Esc work it
-bool Message(void*, uint32_t msg, uintptr_t wp, intptr_t, intptr_t*) {
+bool Message(void*, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t*) {
+    if (g_capture >= 0 && (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)) {
+        std::lock_guard lock(app::UiLock());
+        if (g_capture < 0) return true;
+        if (lp & (1 << 30)) return true;  // held from before (the OK that started the waiting)
+        uint16_t vk = uint16_t(wp);
+        bool extended = (lp >> 24) & 1;
+        if (vk == VK_SHIFT) vk = uint16_t(MapVirtualKeyW(UINT((lp >> 16) & 0xFF), MAPVK_VSC_TO_VK_EX));
+        if (vk == VK_CONTROL) vk = extended ? VK_RCONTROL : VK_LCONTROL;
+        if (vk == VK_MENU) vk = extended ? VK_RMENU : VK_LMENU;
+        if (vk != VK_ESCAPE && vk != VK_F10) {
+            auto& k = input::Keys()[size_t(g_capture)];
+            k[size_t(g_capture_slot)] = vk;
+            if (k[0] == k[1]) k[1] = 0;
+            if (!k[0]) std::swap(k[0], k[1]);
+            app::Save();
+        }
+        g_capture = -1;
+        return true;
+    }
+    if (g_capture >= 0 && (msg == WM_KEYUP || msg == WM_SYSKEYUP)) return true;
     if (wp == VK_F10 && (msg == WM_SYSKEYUP || msg == WM_KEYUP)) return true;  // not the window menu
     if (msg != WM_KEYDOWN && !(msg == WM_SYSKEYDOWN && wp == VK_F10)) return false;
     std::lock_guard lock(app::UiLock());
