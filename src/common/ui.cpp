@@ -51,7 +51,7 @@ const ImU32 kValueChosen = IM_COL32(186, 121, 0, 255);
 const ImU32 kFlash = IM_COL32(186, 186, 186, 255);
 const ImU32 kTitleTint = IM_COL32(184, 184, 184, 255);  // of the orange title lettering
 const ImU32 kArrow = IM_COL32(184, 56, 0, 255);
-const ImU32 kHelp = IM_COL32(184, 120, 0, 255);
+const ImU32 kHelp = IM_COL32(158, 102, 0, 255);  // the game's help line at its letters' middle
 const ImU32 kLine = IM_COL32(150, 150, 150, 255);
 const ImU32 kDiamond = IM_COL32(19, 19, 19, 255);
 
@@ -364,9 +364,11 @@ void Text(ImDrawList* dl, const Frame& f, ImFont* font, float px, float x, float
 }
 
 // the help line: the game's Arial Bold in orange with a black edge all round
+// the game's help line: its own Arial-like font, wider than Arial Bold by an eighth, drawn small and stretched up so
+// its edges are soft: Arial Bold widened as much, its letters drawn around their place at a share of their light
 void Help(ImDrawList* dl, const Frame& f, const std::string& s, float alpha = 1) {
     ImFont* font = g_bold ? g_bold : ImGui::GetFont();
-    float size = 31 * f.s, widen = Widen();
+    float size = 32 * f.s, widen = Widen() * 1.13f;
     ImVec2 ext = font->CalcTextSizeA(size, FLT_MAX, 0, s.c_str());
     ImVec2 at = f.P(720, 655);
     at = {at.x - ext.x * widen / 2, at.y - ext.y / 2};
@@ -374,7 +376,10 @@ void Help(ImDrawList* dl, const Frame& f, const std::string& s, float alpha = 1)
     float e = 2 * f.s;
     const ImVec2 edge[] = {{-e, 0}, {e, 0}, {0, -e}, {0, e}, {-e, -e}, {e, -e}, {-e, e}, {e, e}};
     for (ImVec2 o : edge) dl->AddText(font, size, {at.x + o.x, at.y + o.y}, Fade(IM_COL32(0, 0, 0, 255), alpha), s.c_str());
-    dl->AddText(font, size, at, Fade(kHelp, alpha), s.c_str());
+    float soft = 0.9f * f.s;
+    const ImVec2 blur[] = {{-soft, 0}, {soft, 0}, {0, -soft}, {0, soft}};
+    for (ImVec2 o : blur) dl->AddText(font, size, {at.x + o.x, at.y + o.y}, Fade(kHelp, alpha * 0.3f), s.c_str());
+    dl->AddText(font, size, at, Fade(kHelp, alpha * 0.75f), s.c_str());
     for (int i = first; i < dl->VtxBuffer.Size; i++) dl->VtxBuffer[i].pos.x = at.x + (dl->VtxBuffer[i].pos.x - at.x) * widen;
 }
 
