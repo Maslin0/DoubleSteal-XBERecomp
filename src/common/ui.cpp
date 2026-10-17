@@ -75,6 +75,7 @@ struct Prompt {
     float x, y, h;  // the room's left, the prompt's top and height, in the page's 640x480 units
     uint32_t colour;
     std::string key;
+    bool over;  // a dialog's own, over its backdrop
 };
 std::mutex g_prompt_lock;
 std::vector<Prompt> g_prompts_next, g_prompts;
@@ -268,6 +269,8 @@ Image CutOut(const Image& sheet, const Cut& c, float slant) {
         float slanted = x - (c.y1 - 1 - y) * slant;
         if (slanted < c.left || slanted >= c.right) return;
         const uint8_t* p = &sheet.rgba[(size_t(y) * sheet.w + x) * 4];
+        // the rows' letters are grey: an orange word's bottom showing in a cut's top rows is left out
+        if (y < c.y0 + 2 && p[0] > p[2] + 60) return;
         float a = p[3] / 255.0f * weight;
         for (int k = 0; k < 3; k++) acc[k] += p[k] * a;
         acc[3] += a;
@@ -500,7 +503,13 @@ float Lettering(ImDrawList* dl, const Frame& f, float x, float y, ImU32 colour, 
     return w / f.s;
 }
 
-std::string PromptText(const std::string& key) { return "(" + key + ")"; }
+// a prompt's key in brackets, (x, y) its left and middle; its width. The closing bracket stands a little off, the
+// letters' slant leaning their tops into it
+float PromptLettering(ImDrawList* dl, const Frame& f, float x, float y, ImU32 colour, const std::string& key) {
+    float w = Lettering(dl, f, x, y, colour, "(" + key, kStart, kPromptScale);
+    float gap = 2.5f * kTexel * kPromptScale;
+    return w + gap + Lettering(dl, f, x + w + gap, y, colour, ")", kStart, kPromptScale);
+}
 
 // the prompts show keys: the keyboard was used last (STEAL_KEY_PROMPTS=1: as if, for tests)
 bool KeysShown() {
@@ -520,12 +529,14 @@ void PromptsDraw() {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     Frame f = Fit();
     for (const Prompt& p : prompts) {
-        // as the A and B sprites are placed (measured on OPTIONS at 1080p): their top at 420 is 684.7, 1.46 a texel
-        float x = 720 + (p.x - 320) * PageUnit(), y = 684.7f + (p.y + p.h / 2 - 420) * 1.46f;
+        // as the A and B sprites are placed (measured on OPTIONS at 1080p): their middle at 435 is 706.6, a page's
+        // unit 1.53 down (measured again by TIME ZONE's, at 262)
+        float x = 720 + (p.x - 320) * PageUnit(), y = 706.6f + (p.y + p.h / 2 - 435) * kTexel;
         // the words are their sprite's grey (166 at most, 1080p) times the colour: the key as light
-        auto lit = [&](int shift) { return int(((p.colour >> shift) & 0xFF) * kPromptGrey / 255 * dim + 0.5f); };
+        float keep = p.over ? 1 : dim;
+        auto lit = [&](int shift) { return int(((p.colour >> shift) & 0xFF) * kPromptGrey / 255 * keep + 0.5f); };
         ImU32 c = IM_COL32(lit(16), lit(8), lit(0), p.colour >> 24);
-        Lettering(dl, f, x, y, c, PromptText(p.key), kStart, kPromptScale);
+        PromptLettering(dl, f, x, y, c, p.key);
     }
 }
 
@@ -671,11 +682,10 @@ void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std:
             if (KeysShown()) {
                 // as the game's prompts with the keyboard: the key in brackets, then the word, the buttons after
                 // moved right by the keys' room
-                std::string key = PromptText(i ? "ESC" : "ENTER");
-                float room = Lettering(nullptr, f, 0, 0, 0, key + " ", kStart, kPromptScale);
+                std::string key = i ? "ESC" : "ENTER";
+                float room = PromptLettering(nullptr, f, 0, 0, 0, key) + Lettering(nullptr, f, 0, 0, 0, " ", kStart, kPromptScale);
                 float at = left + keys_room;
-                Lettering(dl, f, at, (top + bottom) / 2, Fade(IM_COL32(kPromptGrey, kPromptGrey, kPromptGrey, 255), in), key,
-                          kStart, kPromptScale);
+                PromptLettering(dl, f, at, (top + bottom) / 2, Fade(IM_COL32(kPromptGrey, kPromptGrey, kPromptGrey, 255), in), key);
                 dl->AddImage(atlas->TexID, f.P(at + room, top), f.P(at + room + (w - split) * sx, bottom), {uvx, uv0.y},
                              uv1, Fade(IM_COL32(191, 191, 191, 255), in));
                 keys_room += room - split * sx;
@@ -1245,12 +1255,12 @@ float PromptRoom(char button, std::string& key) {
     }
     if (key.empty()) return 0;
     Frame f{{0, 0}, 1};
-    return Lettering(nullptr, f, 0, 0, 0, PromptText(key) + " ", kStart, kPromptScale) / PageUnit();
+    return (PromptLettering(nullptr, f, 0, 0, 0, key) + Lettering(nullptr, f, 0, 0, 0, " ", kStart, kPromptScale)) / PageUnit();
 }
 
-void AddPrompt(float x, float y, float h, uint32_t colour, const std::string& key) {
+void AddPrompt(float x, float y, float h, uint32_t colour, const std::string& key, bool over) {
     std::lock_guard lock(g_prompt_lock);
-    g_prompts_next.push_back({x, y, h, colour, key});
+    g_prompts_next.push_back({x, y, h, colour, key, over});
 }
 
 // a dialog's backdrop over the page this frame: its prompts keep that much of their light

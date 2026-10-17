@@ -36,7 +36,7 @@ bool HideOptions();  // Recomp Settings is drawn over the OPTIONS page: its rows
 bool TakeOptionsReplay();  // Recomp Settings closed over the OPTIONS page: the page comes in again
 bool TakeSound(uint32_t& id);
 float PromptRoom(char button, std::string& key);  // the room the button's key takes, 0 to leave the prompt be
-void AddPrompt(float x, float y, float h, uint32_t colour, const std::string& key);
+void AddPrompt(float x, float y, float h, uint32_t colour, const std::string& key, bool over);
 void DimPrompts(float keep);  // the frame's prompts under a dialog's backdrop, keeping that much of their light
 void PromptsFrame();  // a menu sound Recomp Settings asks for, for the game to play
 }
@@ -339,6 +339,13 @@ float RowRoom(int y, float room) {
     g_row_rooms.push_back({y, room});
     return 0;
 }
+// the button of a prompt element: A, B, X or Y alone or before its word (A_Ok, B_Back under TIME ZONE, A_Continue),
+// 0 for any other element
+char PromptButton(const char* name) {
+    if (!name || !name[0]) return 0;
+    if (!std::strchr("ABXY", name[0]) || (name[1] && name[1] != '_')) return 0;
+    return name[0];
+}
 }
 // FUN_0006D7E0 (count, ...): room for a sprite's vertices in the frame's batch, none while the page is not being
 // drawn (a black screen between pages runs its frames all the same)
@@ -360,19 +367,85 @@ X86_FUNC(sub_000EA300) {  // thiscall mover (short* x, short* y) -> placed
         U16(px) = uint16_t(g_moved_x + g_shift);
     }
 }
+// a prompt element drawn by imp with sprite (its record in the sheet): without its button, its key lettered there
+void DrawPrompt(X86Context& ctx, uint8_t* base, void (*imp)(X86Context&, uint8_t*), const char* name, uint32_t sprite) {
+    uint32_t el = ctx.ecx;
+    std::string key;
+    float room = 0;
+    char button = PromptButton(name);
+    if (button && *static_cast<uint8_t*>(kernel::HostPtr(el + 0x24))) room = ui::PromptRoom(button, key);
+    if (room <= 0) {
+        imp(ctx, base);
+        return;
+    }
+    uint16_t u0 = U16(sprite + 4), w = U16(sprite + 0xC), h = U16(sprite + 0xE);
+    // the button and its gap: a circle a little under the sprite's height (on Options.xpr: 30 high, the word from 28);
+    // beside two rows of words (MISSION SELECT's Y, 60 high) the words from 32
+    uint16_t cut = uint16_t(std::min<int>({h - 2, 32, w - 1}));
+    float& x = *static_cast<float*>(kernel::HostPtr(el + 0x18));
+    float y = *static_cast<float*>(kernel::HostPtr(el + 0x1C));
+    float at = x;
+    // where the sprite hangs from its place (the description +8: bits 0-1 left, centre, right; bits 2-3 top, middle,
+    // bottom): A_Ok and B_Back by their middle
+    uint16_t anchor = U16(kernel::R32(el + 0x10) + 8);
+    float ax = (anchor & 3) == 1 ? 0.5f : (anchor & 3) == 2 ? 1.0f : 0.0f;
+    float ay = (anchor & 0xC) == 4 ? 0.5f : (anchor & 0xC) == 8 ? 1.0f : 0.0f;
+    uint32_t frame = kernel::R32(ctx.esp + 8);
+    uint32_t colour = kernel::CallGuest(ctx, kElementColour, {frame});
+
+    if (std::getenv("STEAL_PROMPT_LOG")) {
+        static std::vector<std::string> logged;
+        if (std::find(logged.begin(), logged.end(), name) == logged.end() && (logged.push_back(name), true))
+            LOGW("prompt %s sprite %08X u0 %u v0 %u u1 %u v1 %u w %u h %u cut %u x %.1f y %.1f anchor %X room %.1f colour %08X el+4 %08X",
+                 name, sprite, u0, U16(sprite + 6), U16(sprite + 8), U16(sprite + 10), w, h, cut, at, y, anchor, room, colour,
+                 kernel::R32(el + 4));
+    }
+    // the sprite's u in its own units, a texel being (u1 - u0) / w of them
+    uint16_t ucut = uint16_t((U16(sprite + 8) - u0) * cut / std::max<uint16_t>(w, 1));
+    U16(sprite + 4) = uint16_t(u0 + ucut);
+    U16(sprite + 0xC) = uint16_t(w - cut);
+    // the word, narrower by the button, starts the key's room right of where the sprite started
+    float before = RowRoom(int(y), room);
+    float shift = before + room - ax * cut;
+    x = at + shift;
+    g_shift_mover = kernel::R32(el + 4);
+    g_shift = int(std::lround(shift));
+    g_moved = false;
+    g_drawing_prompt = true;
+    g_prompt_drawn = false;
+    imp(ctx, base);
+    g_drawing_prompt = false;
+    g_shift_mover = 0;
+    x = at;
+    if (g_prompt_drawn && g_prompt_batch) {
+        float light;
+        uint32_t u = kernel::R32(g_prompt_batch + 0x2870);
+        std::memcpy(&light, &u, 4);
+        light = std::clamp(light, 0.0f, 1.0f);
+        colour = (colour & 0x00FFFFFF) | (uint32_t((colour >> 24) * light + 0.5f) << 24);
+    }
+    // a dialog's own prompts (A_Ok, B_Back) are over its backdrop
+    bool over = std::strchr(name, '_') != nullptr;
+    if (!g_prompt_drawn || !(colour >> 24)) {
+        // not drawn: its key neither
+    } else if (g_moved) {
+        ui::AddPrompt(float(g_moved_x) - ax * w + before, float(g_moved_y) - ay * h, float(h), colour, key, over);
+    } else {
+        ui::AddPrompt(at - ax * w + before, y - ay * h, float(h), colour, key, over);
+    }
+    U16(sprite + 4) = u0;
+    U16(sprite + 0xC) = w;
+}
+
 X86_EXTERN_FUNC(__imp__sub_000EB610);
 X86_FUNC(sub_000EB610) {
     uint32_t el = ctx.ecx, desc = kernel::R32(el + 0x10);
     const char* name = desc ? static_cast<const char*>(kernel::HostPtr(kernel::R32(desc))) : nullptr;
-    std::string key;
-    float room = 0;
-    bool prompt = name && name[0] && !name[1] && std::strchr("ABXY", name[0]) && *static_cast<uint8_t*>(kernel::HostPtr(el + 0x24));
-    if (prompt) room = ui::PromptRoom(name[0], key);
     if (std::getenv("STEAL_PROMPT_LOG") && name) {
         static std::vector<std::string> seen;
         if (std::find(seen.begin(), seen.end(), name) == seen.end()) {
             seen.push_back(name);
-            LOGW("element drawn %s prompt %d room %.1f key %s", name, int(prompt), room, key.c_str());
+            LOGW("element drawn %s", name);
         }
     }
     // a dialog's backdrop (Sure_Bg under "Are you sure?", Timezone_Bg under TIME ZONE): a sheet of half black over
@@ -400,58 +473,35 @@ X86_FUNC(sub_000EB610) {
         }
         return;
     }
-    if (room <= 0) {
-        __imp__sub_000EB610(ctx, base);
+    uint32_t sprite = kernel::R32(kernel::R32(el + 0x14) + 0x10) + uint32_t(int16_t(U16(desc + 6))) * 0x18;
+    DrawPrompt(ctx, base, __imp__sub_000EB610, name, sprite);
+}
+
+// An animated image element drawn (FUN_000EAF50, as FUN_000EB610): its sprite the one of its animation's frame (the
+// sheet +0x18 the animations' tables by the description +6, a table +2 the frames' sprites; the frame its timeline's
+// at element +0xC, or element +0x38): TIME ZONE's A OK and B BACK, MISSION SELECT's Y WATCH CLEAR CONDITION
+X86_EXTERN_FUNC(__imp__sub_000EAF50);
+X86_FUNC(sub_000EAF50) {
+    uint32_t el = ctx.ecx, desc = kernel::R32(el + 0x10);
+    const char* name = desc ? static_cast<const char*>(kernel::HostPtr(kernel::R32(desc))) : nullptr;
+    if (std::getenv("STEAL_PROMPT_LOG") && name) {
+        static std::vector<std::string> seen;
+        if (std::find(seen.begin(), seen.end(), name) == seen.end()) {
+            seen.push_back(name);
+            LOGW("animated element drawn %s", name);
+        }
+    }
+    if (!PromptButton(name) || !*static_cast<uint8_t*>(kernel::HostPtr(el + 0x24))) {
+        __imp__sub_000EAF50(ctx, base);
         return;
     }
-    uint32_t sprite = kernel::R32(kernel::R32(el + 0x14) + 0x10) + uint32_t(int16_t(U16(desc + 6))) * 0x18;
-    uint16_t u0 = U16(sprite + 4), w = U16(sprite + 0xC), h = U16(sprite + 0xE);
-    // the button and its gap: a circle a little under the sprite's height (on Options.xpr: 30 high, the word from 28)
-    uint16_t cut = uint16_t(std::min<int>(h - 2, w - 1));
-    float& x = *static_cast<float*>(kernel::HostPtr(el + 0x18));
-    float y = *static_cast<float*>(kernel::HostPtr(el + 0x1C));
-    float left = x;
-    uint32_t frame = kernel::R32(ctx.esp + 8);
-    uint32_t colour = kernel::CallGuest(ctx, kElementColour, {frame});
-
-    if (std::getenv("STEAL_PROMPT_LOG")) {
-        static int n = 0;
-        if (n++ < 6)
-            LOGW("prompt %s sprite %08X u0 %u v0 %u u1 %u v1 %u w %u h %u cut %u x %.1f y %.1f room %.1f colour %08X el+4 %08X", name,
-                 sprite, u0, U16(sprite + 6), U16(sprite + 8), U16(sprite + 10), w, h, cut, left, y, room, colour,
-                 kernel::R32(el + 4));
-    }
-    // the sprite's u in its own units, a texel being (u1 - u0) / w of them
-    uint16_t ucut = uint16_t((U16(sprite + 8) - u0) * cut / std::max<uint16_t>(w, 1));
-    U16(sprite + 4) = uint16_t(u0 + ucut);
-    U16(sprite + 0xC) = uint16_t(w - cut);
-    float before = RowRoom(int(y), room);
-    x = left + before + room;
-    g_shift_mover = kernel::R32(el + 4);
-    g_shift = int(before + room + 0.5f);
-    g_moved = false;
-    g_drawing_prompt = true;
-    g_prompt_drawn = false;
-    __imp__sub_000EB610(ctx, base);
-    g_drawing_prompt = false;
-    g_shift_mover = 0;
-    x = left;
-    if (g_prompt_drawn && g_prompt_batch) {
-        float light;
-        uint32_t u = kernel::R32(g_prompt_batch + 0x2870);
-        std::memcpy(&light, &u, 4);
-        light = std::clamp(light, 0.0f, 1.0f);
-        colour = (colour & 0x00FFFFFF) | (uint32_t((colour >> 24) * light + 0.5f) << 24);
-    }
-    if (!g_prompt_drawn || !(colour >> 24)) {
-        // not drawn: its key neither
-    } else if (g_moved) {
-        ui::AddPrompt(float(g_moved_x) + before, float(g_moved_y), float(h), colour, key);
-    } else {
-        ui::AddPrompt(left + before, y, float(h), colour, key);
-    }
-    U16(sprite + 4) = u0;
-    U16(sprite + 0xC) = w;
+    uint32_t sheet = kernel::R32(el + 0x14);
+    uint32_t table = kernel::R32(kernel::R32(sheet + 0x18) + uint32_t(int16_t(U16(desc + 6))) * 4);
+    int32_t frame = int32_t(kernel::R32(el + 0x38));
+    if (uint32_t line = kernel::R32(el + 0xC); line && *static_cast<uint8_t*>(kernel::HostPtr(line + 8)))
+        frame = int16_t(U16(kernel::R32(kernel::R32(line + 4) + 0x14) + kernel::R32(line + 0x14) * 4));
+    uint32_t sprite = kernel::R32(sheet + 0x10) + uint32_t(int16_t(U16(table + 2 + uint32_t(frame) * 2))) * 0x18;
+    DrawPrompt(ctx, base, __imp__sub_000EAF50, name, sprite);
 }
 
 X86_EXTERN_FUNC(__imp__sub_000EBD00);
