@@ -279,6 +279,7 @@ struct Sprite {
     float page_x;        // the left of the pixels in the page's 640 units
 };
 constexpr Sprite kButtons[] = {{2, 422, 60, 448, 24.8f}, {2, 452, 86, 478, 96.5f}};
+constexpr int kButtonSplit = 28;          // the sheet's column between a button and its word
 constexpr float kSpriteTexel = 1.46f;     // frame units a texel, before the widescreen widening
 constexpr float kButtonsBottom = 719.7f;  // in the frame
 int g_button_rects[2] = {-1, -1};
@@ -574,9 +575,15 @@ void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std:
             ImVec2 uv0, uv1;
             atlas->CalcCustomRectUV(r, &uv0, &uv1);
             float left = 720 + (b.page_x - 320 - (i ? 205 : 65) * Left(shown, 15)) * sx - sx;
-            float bottom = kButtonsBottom + sy;
-            dl->AddImage(atlas->TexID, f.P(left, bottom - (b.y1 - b.y0) * sy), f.P(left + (b.x1 - b.x0) * sx, bottom),
-                         uv0, uv1, Fade(IM_COL32(220, 220, 220, 255), FadeIn(shown, 15)));  // as dim as the game shows them
+            float bottom = kButtonsBottom + sy, top = bottom - (b.y1 - b.y0) * sy;
+            // the button, then its word, each as dim as the game shows them (the word dimmer, 1080p capture)
+            float split = float(kButtonSplit - b.x0), w = float(b.x1 - b.x0);
+            float uvx = uv0.x + (uv1.x - uv0.x) * split / w;
+            float in = FadeIn(shown, 15);
+            dl->AddImage(atlas->TexID, f.P(left, top), f.P(left + split * sx, bottom), uv0, {uvx, uv1.y},
+                         Fade(IM_COL32(220, 220, 220, 255), in));
+            dl->AddImage(atlas->TexID, f.P(left + split * sx, top), f.P(left + w * sx, bottom), {uvx, uv0.y}, uv1,
+                         Fade(IM_COL32(191, 191, 191, 255), in));
         }
     } else {
         Button(dl, f, 167, IM_COL32(62, 166, 40, 255), "A", "OK");
