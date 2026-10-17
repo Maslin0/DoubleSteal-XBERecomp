@@ -51,7 +51,7 @@ const ImU32 kValueChosen = IM_COL32(186, 121, 0, 255);
 const ImU32 kFlash = IM_COL32(186, 186, 186, 255);
 const ImU32 kTitleTint = IM_COL32(184, 184, 184, 255);  // of the orange title lettering
 const ImU32 kArrow = IM_COL32(184, 56, 0, 255);
-const ImU32 kHelp = IM_COL32(158, 102, 0, 255);  // the game's help line at its letters' middle
+const ImU32 kHelp = IM_COL32(200, 133, 0, 255);  // the game's help line at its letters' middle, 1080p capture
 const ImU32 kLine = IM_COL32(150, 150, 150, 255);
 const ImU32 kDiamond = IM_COL32(19, 19, 19, 255);
 
