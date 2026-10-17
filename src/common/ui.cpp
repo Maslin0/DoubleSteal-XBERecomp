@@ -747,23 +747,56 @@ int g_row = 0;
 
 enum Key { kUp, kDown, kLeft, kRight, kOk, kBack, kKeys };
 
+// The page comes and goes as the game's pages switch: what was up darkens to black over 8 frames, the screen stays
+// black 3, and what comes next brightens over 8 (its title sliding in, its rows coming in from the top)
+constexpr double kDarken = 8, kBlack = 3, kBrighten = 8;
+enum class Veil { kNone, kOpening, kClosing };
+Veil g_veil = Veil::kNone;
+Clock::time_point g_veil_at;
+
+Clock::time_point After(double frames) {
+    return Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(frames / 30));
+}
+
+// the page is drawn: not while what was up before it darkens
+bool PageUp() { return g_open && !(g_veil == Veil::kOpening && Frames(g_veil_at) < kDarken + kBlack); }
+
 void Open() {
     g_section = -1;
     g_row = 0;
     g_over_game = OptionsUp();
     g_open = true;
-    g_shown_at = g_chosen_at = Clock::now();
+    g_veil = Veil::kOpening;
+    g_veil_at = Clock::now();
+    g_shown_at = g_chosen_at = After(kDarken + kBlack);
 }
 
+// the page goes once darkened (Draw)
 void Close() {
-    g_open = false;
+    if (g_veil == Veil::kClosing) return;
+    g_veil = Veil::kClosing;
+    g_veil_at = Clock::now();
     g_swallow = true;
     app::Save();
+}
+
+// the black over everything: rising, held, falling as the veil goes on; closes the page once it is black
+float VeilDarkness() {
+    if (g_veil == Veil::kNone) return 0;
+    double t = Frames(g_veil_at);
+    if (t < kDarken) return float(t / kDarken);
+    if (t < kDarken + kBlack) return 1;
+    if (g_veil == Veil::kClosing && g_open) g_open = false;
+    t -= kDarken + kBlack;
+    if (t < kBrighten) return float(1 - t / kBrighten);
+    g_veil = Veil::kNone;
+    return 0;
 }
 
 void Turn(Key k, int rows);
 
 void Press(Key k) {
+    if (g_veil != Veil::kNone) return;  // not while the page comes or goes
     int rows = g_section < 0 ? kSectionCount + 1 : kSections[g_section].count;
     int section = g_section, row = g_row;
     Turn(k, rows);
@@ -892,7 +925,7 @@ void OpenPage() {
     Open();
 }
 
-bool HideOptions() { return g_open && g_over_game; }
+bool HideOptions() { return PageUp() && g_over_game; }
 
 void OptionsShown() { g_options_seen = Clock::now().time_since_epoch().count(); }
 
@@ -923,10 +956,15 @@ void Draw(double fps) {
         g_apply_at = {};
         app::ApplyDisplay();
     }
-    if (g_open) {
+    float dark = VeilDarkness();
+    if (PageUp()) {
         Page();
-    } else if (OptionsUp()) {
+    } else if (!g_open && OptionsUp()) {
         OptionsRowDraw();
+    }
+    if (dark > 0) {
+        ImGui::GetForegroundDrawList()->AddRectFilled({0, 0}, ImGui::GetIO().DisplaySize,
+                                                      IM_COL32(0, 0, 0, int(dark * 255 + 0.5f)));
     }
     if (g_fps_counter) Counter(fps);
 }
