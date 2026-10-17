@@ -401,16 +401,16 @@ float Lettering(ImDrawList* dl, const Frame& f, float x, float y, ImU32 colour, 
 }
 
 // a page's title, the game's orange lettering at its left, (x, y) its left edge and middle
-void Title(ImDrawList* dl, const Frame& f, float x, float y, const std::string& s) {
+void Title(ImDrawList* dl, const Frame& f, float x, float y, const std::string& s, float alpha = 1) {
     if (!g_title) {
-        Text(dl, f, g_heavy, 54, x, y, kGold, s, kStart, true, Widen());
+        Text(dl, f, g_heavy, 54, x, y, Fade(kGold, alpha), s, kStart, true, Widen());
         return;
     }
     float size = kCell * kTexel * f.s, widen = Widen();
     ImVec2 at = f.P(x, y);
     at.y -= (kTitles.top + kTitles.band / 2) * kTexel * f.s;
     int first = dl->VtxBuffer.Size;
-    dl->AddText(g_title, size, at, kTitleTint, s.c_str());
+    dl->AddText(g_title, size, at, Fade(kTitleTint, alpha), s.c_str());
     for (int i = first; i < dl->VtxBuffer.Size; i++) dl->VtxBuffer[i].pos.x = at.x + (dl->VtxBuffer[i].pos.x - at.x) * widen;
 }
 
@@ -436,6 +436,14 @@ float RowIn(double frames, float row, bool chosen) {
     if (chosen || row <= 0) return 1;
     float t = float(frames) / (9 + 5 * (row - 1));
     return std::min(1.0f, t * t);
+}
+
+// a page's title slides in from the left as it brightens: about 200 units out, closing by 22% a frame, its light
+// growing as the square of the time over 11 frames
+float TitleSlide(double frames) { return -204.0f * std::pow(0.78f, float(frames)); }
+float TitleIn(double frames) {
+    float t = std::min(1.0f, float(frames) / 11);
+    return t * t;
 }
 
 // the chosen row flashes white every 22 frames, from its choosing, and fades back over 14
@@ -480,9 +488,10 @@ void Button(ImDrawList* dl, const Frame& f, float x, ImU32 colour, const char* l
 // its rows and title meanwhile)
 std::atomic<bool> g_over_game{false};
 
-void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std::string& help) {
+void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std::string& help, double shown) {
+    float slide = TitleSlide(shown), in = TitleIn(shown);
     if (g_over_game) {
-        Title(dl, f, 152, 105, title);
+        Title(dl, f, 152 + slide, 105, title, in);
         Help(dl, f, help);
         return;
     }
@@ -496,7 +505,7 @@ void Chrome(ImDrawList* dl, const Frame& f, const std::string& title, const std:
         }
     Polyline(dl, f, {{66, 83}, {1228, 83}, {1276, 47}, {1372, 47}}, kGold, 3);
     Polyline(dl, f, {{66, 128}, {1250, 128}, {1298, 92}, {1372, 92}}, kGold, 3);
-    Title(dl, f, 152, 105, title);
+    Title(dl, f, 152 + slide, 105, title, in);
     Polyline(dl, f, {{66, 655}, {125, 655}, {155, 632}, {1285, 632}, {1315, 655}, {1372, 655}}, kLine, 2.5f);
     Help(dl, f, help);
     Polyline(dl, f, {{66, 678}, {1372, 678}}, kLine, 2.5f);
@@ -799,7 +808,7 @@ void Page() {
     double shown = Frames(g_shown_at), chosen = Frames(g_chosen_at);
     float flash = Flash(chosen), spring = Spring(chosen);
     if (g_section < 0) {
-        Chrome(dl, f, "RECOMP SETTINGS", g_row < kSectionCount ? kSections[g_row].help : "Back to the game");
+        Chrome(dl, f, "RECOMP SETTINGS", g_row < kSectionCount ? kSections[g_row].help : "Back to the game", shown);
         for (int i = 0; i <= kSectionCount; i++) {
             bool on = i == g_row;
             float in = RowIn(shown, float(i), on);
@@ -814,7 +823,7 @@ void Page() {
         return;
     }
     const Section& sec = kSections[g_section];
-    Chrome(dl, f, sec.name, sec.rows[g_row].help);
+    Chrome(dl, f, sec.name, sec.rows[g_row].help, shown);
     // the rows a little smaller than the game's, for the longer names and values; around the page's middle
     constexpr float kScale = 0.9f, kPitch = 46;
     float top = 380 - (sec.count - 1) * kPitch / 2;
