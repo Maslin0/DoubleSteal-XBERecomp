@@ -79,6 +79,7 @@ struct Prompt {
 std::mutex g_prompt_lock;
 std::vector<Prompt> g_prompts_next, g_prompts;
 Clock::time_point g_prompts_at;  // the game frame that drew them began: a loading screen's loop runs no such frames
+float g_prompts_dim = 1, g_prompts_dim_next = 1;  // under a dialog's backdrop: the light they keep
 constexpr float kPromptScale = 0.6f;  // the prompts' words against the rows' lettering
 constexpr int kPromptGrey = 205;      // the prompts' words' grey, as they look
 
@@ -509,9 +510,11 @@ bool KeysShown() {
 
 void PromptsDraw() {
     std::vector<Prompt> prompts;
+    float dim;
     {
         std::lock_guard lock(g_prompt_lock);
         if (Clock::now() - g_prompts_at < std::chrono::milliseconds(100)) prompts = g_prompts;
+        dim = g_prompts_dim;
     }
     if (prompts.empty()) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
@@ -520,7 +523,7 @@ void PromptsDraw() {
         // as the A and B sprites are placed (measured on OPTIONS at 1080p): their top at 420 is 684.7, 1.46 a texel
         float x = 720 + (p.x - 320) * PageUnit(), y = 684.7f + (p.y + p.h / 2 - 420) * 1.46f;
         // the words are their sprite's grey (166 at most, 1080p) times the colour: the key as light
-        auto lit = [&](int shift) { return int(((p.colour >> shift) & 0xFF) * kPromptGrey / 255); };
+        auto lit = [&](int shift) { return int(((p.colour >> shift) & 0xFF) * kPromptGrey / 255 * dim + 0.5f); };
         ImU32 c = IM_COL32(lit(16), lit(8), lit(0), p.colour >> 24);
         Lettering(dl, f, x, y, c, PromptText(p.key), kStart, kPromptScale);
     }
@@ -1250,11 +1253,19 @@ void AddPrompt(float x, float y, float h, uint32_t colour, const std::string& ke
     g_prompts_next.push_back({x, y, h, colour, key});
 }
 
+// a dialog's backdrop over the page this frame: its prompts keep that much of their light
+void DimPrompts(float keep) {
+    std::lock_guard lock(g_prompt_lock);
+    g_prompts_dim_next = std::min(g_prompts_dim_next, keep);
+}
+
 // the game begins a frame: the last one's prompts are the ones shown
 void PromptsFrame() {
     std::lock_guard lock(g_prompt_lock);
     g_prompts.swap(g_prompts_next);
     g_prompts_next.clear();
+    g_prompts_dim = g_prompts_dim_next;
+    g_prompts_dim_next = 1;
     g_prompts_at = Clock::now();
 }
 

@@ -37,6 +37,7 @@ bool TakeOptionsReplay();  // Recomp Settings closed over the OPTIONS page: the 
 bool TakeSound(uint32_t& id);
 float PromptRoom(char button, std::string& key);  // the room the button's key takes, 0 to leave the prompt be
 void AddPrompt(float x, float y, float h, uint32_t colour, const std::string& key);
+void DimPrompts(float keep);  // the frame's prompts under a dialog's backdrop, keeping that much of their light
 void PromptsFrame();  // a menu sound Recomp Settings asks for, for the game to play
 }
 
@@ -318,6 +319,9 @@ constexpr uint32_t kElementColour = 0x000EADD0;  // thiscall element (frame) -> 
 // moves right there too
 uint32_t g_shift_mover = 0;
 int g_shift = 0;
+bool g_drawing_bg = false;      // in a dialog's backdrop's draw (Sure_Bg, Timezone_Bg), drawn when g_bg_drawn
+bool g_bg_drawn = false;
+uint32_t g_bg_batch = 0;
 bool g_drawing_prompt = false;  // in a prompt's draw: whether it got room for its vertices (it was drawn)
 bool g_prompt_drawn = false;
 uint32_t g_prompt_batch = 0;  // the sprite batch it went into: +0x2870 the batch's light (its pixel shader's alpha;
@@ -343,6 +347,7 @@ X86_FUNC(sub_0006D7E0) {
     uint32_t batch = ctx.ecx;
     __imp__sub_0006D7E0(ctx, base);
     if (g_drawing_prompt) g_prompt_drawn = ctx.eax != 0, g_prompt_batch = batch;
+    if (g_drawing_bg) g_bg_drawn = ctx.eax != 0, g_bg_batch = batch;
 }
 X86_EXTERN_FUNC(__imp__sub_000EA300);
 X86_FUNC(sub_000EA300) {  // thiscall mover (short* x, short* y) -> placed
@@ -369,6 +374,31 @@ X86_FUNC(sub_000EB610) {
             seen.push_back(name);
             LOGW("element drawn %s prompt %d room %.1f key %s", name, int(prompt), room, key.c_str());
         }
+    }
+    // a dialog's backdrop (Sure_Bg under "Are you sure?", Timezone_Bg under TIME ZONE): a sheet of half black over
+    // the page, its prompts under it whenever drawn (the batch is drawn by layers): their keys as dark
+    if (name && (!std::strcmp(name, "Sure_Bg") || !std::strcmp(name, "Timezone_Bg"))) {
+        uint32_t frame = kernel::R32(ctx.esp + 8), ecx = ctx.ecx;
+        uint32_t colour = kernel::CallGuest(ctx, kElementColour, {frame});
+        ctx.ecx = ecx;
+        g_drawing_bg = true;
+        g_bg_drawn = false;
+        __imp__sub_000EB610(ctx, base);
+        g_drawing_bg = false;
+        if (g_bg_drawn && g_bg_batch) {
+            float light;
+            uint32_t u = kernel::R32(g_bg_batch + 0x2870);
+            std::memcpy(&light, &u, 4);
+            float alpha = std::clamp(light, 0.0f, 1.0f) * float(colour >> 24) / 255;
+            if (std::getenv("STEAL_PROMPT_LOG")) {
+                static std::string last;
+                char line[128];
+                std::snprintf(line, sizeof line, "backdrop %s colour %08X light %.2f", name, colour, light);
+                if (last != line) LOGW("%s", (last = line).c_str());
+            }
+            if (alpha > 0) ui::DimPrompts(1 - 0.5f * alpha);
+        }
+        return;
     }
     if (room <= 0) {
         __imp__sub_000EB610(ctx, base);
