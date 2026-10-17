@@ -80,7 +80,7 @@ std::mutex g_prompt_lock;
 std::vector<Prompt> g_prompts_next, g_prompts;
 Clock::time_point g_prompts_at;  // the game frame that drew them began: a loading screen's loop runs no such frames
 constexpr float kPromptScale = 0.6f;  // the prompts' words against the rows' lettering
-constexpr int kPromptGrey = 166;      // the prompts' words' grey
+constexpr int kPromptGrey = 205;      // the prompts' words' grey, as they look
 
 // --- the game's lettering ------------------------------------------------------------------------------------------
 // The game's menu rows and page titles are sprites of whole words in data\screen\*.xpr (DXT textures): the rows

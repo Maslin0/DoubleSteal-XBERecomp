@@ -318,6 +318,10 @@ constexpr uint32_t kElementColour = 0x000EADD0;  // thiscall element (frame) -> 
 // moves right there too
 uint32_t g_shift_mover = 0;
 int g_shift = 0;
+bool g_drawing_prompt = false;  // in a prompt's draw: whether it got room for its vertices (it was drawn)
+bool g_prompt_drawn = false;
+uint32_t g_prompt_batch = 0;  // the sprite batch it went into: +0x2870 the batch's light (its pixel shader's alpha;
+                              // a page fades with it, the batch is not drawn at 0)
 bool g_moved = false;  // the prompt took its place from its mover, at g_moved_x, g_moved_y
 int g_moved_x = 0, g_moved_y = 0;
 // prompts side by side: each moves right by the rooms of those drawn before it in its row this frame
@@ -331,6 +335,14 @@ float RowRoom(int y, float room) {
     g_row_rooms.push_back({y, room});
     return 0;
 }
+}
+// FUN_0006D7E0 (count, ...): room for a sprite's vertices in the frame's batch, none while the page is not being
+// drawn (a black screen between pages runs its frames all the same)
+X86_EXTERN_FUNC(__imp__sub_0006D7E0);
+X86_FUNC(sub_0006D7E0) {
+    uint32_t batch = ctx.ecx;
+    __imp__sub_0006D7E0(ctx, base);
+    if (g_drawing_prompt) g_prompt_drawn = ctx.eax != 0, g_prompt_batch = batch;
 }
 X86_EXTERN_FUNC(__imp__sub_000EA300);
 X86_FUNC(sub_000EA300) {  // thiscall mover (short* x, short* y) -> placed
@@ -388,11 +400,26 @@ X86_FUNC(sub_000EB610) {
     g_shift_mover = kernel::R32(el + 4);
     g_shift = int(before + room + 0.5f);
     g_moved = false;
+    g_drawing_prompt = true;
+    g_prompt_drawn = false;
     __imp__sub_000EB610(ctx, base);
+    g_drawing_prompt = false;
     g_shift_mover = 0;
     x = left;
-    if (g_moved) ui::AddPrompt(float(g_moved_x) + before, float(g_moved_y), float(h), colour, key);
-    else ui::AddPrompt(left + before, y, float(h), colour, key);
+    if (g_prompt_drawn && g_prompt_batch) {
+        float light;
+        uint32_t u = kernel::R32(g_prompt_batch + 0x2870);
+        std::memcpy(&light, &u, 4);
+        light = std::clamp(light, 0.0f, 1.0f);
+        colour = (colour & 0x00FFFFFF) | (uint32_t((colour >> 24) * light + 0.5f) << 24);
+    }
+    if (!g_prompt_drawn || !(colour >> 24)) {
+        // not drawn: its key neither
+    } else if (g_moved) {
+        ui::AddPrompt(float(g_moved_x) + before, float(g_moved_y), float(h), colour, key);
+    } else {
+        ui::AddPrompt(left + before, y, float(h), colour, key);
+    }
     U16(sprite + 4) = u0;
     U16(sprite + 0xC) = w;
 }
