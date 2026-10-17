@@ -8,6 +8,13 @@
 #include <cstring>
 #include <vector>
 #include <string>
+#include <thread>
+
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
 
 #include "core/log.h"
 
@@ -846,11 +853,11 @@ float FarFactor() {
 }
 void ScaleFar(X86Context& ctx) {
     constexpr uint32_t kFarArg = 16;
-    float far;
+    float plane;
     uint32_t u = kernel::R32(ctx.esp + kFarArg);
-    std::memcpy(&far, &u, 4);
-    far *= FarFactor();
-    std::memcpy(&u, &far, 4);
+    std::memcpy(&plane, &u, 4);
+    plane *= FarFactor();
+    std::memcpy(&u, &plane, 4);
     kernel::W32(ctx.esp + kFarArg, u);
 }
 }  // namespace
@@ -885,6 +892,94 @@ double g_steps = 0;    // the logic's steps since the clock started
 uint32_t g_index = 0;  // the next TickScene's index
 }  // namespace
 uint32_t g_frame_object = 0;  // FUN_00023800's object, +0x4C the game's state
+// XBE_PERF=1: the game's own time each second (its frame FUN_00023800, its logic steps TickScene, its scene's draw
+// FUN_00016730), on its thread
+double g_frame_time = 0, g_tick_time = 0, g_draw_time = 0;
+int g_ticks = 0;
+void GuestTime(double& sum, std::chrono::steady_clock::time_point start) {
+    sum += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+}
+void GuestTimes() {
+    static const bool on = std::getenv("XBE_PERF") != nullptr;
+    static auto last = std::chrono::steady_clock::now();
+    static int frames = 0;
+    frames++;
+    auto now = std::chrono::steady_clock::now();
+    if (!on || now - last < std::chrono::seconds(1)) return;
+    LOGI("perf: game per frame %.2f ms (logic %.2f in %.2f steps, scene draw %.2f)", g_frame_time / frames,
+         g_tick_time / frames, double(g_ticks) / frames, g_draw_time / frames);
+    g_frame_time = g_tick_time = g_draw_time = 0;
+    g_ticks = frames = 0;
+    last = now;
+}
+// STEAL_PROFILE=<from s>,<for s>: the game thread's host instruction pointer sampled each millisecond while its scene
+// draws, into profile.txt (llvm-symbolizer with DoubleSteal.pdb names them; the image base is its first line)
+std::atomic<bool> g_in_draw{false};
+void StartProfiler() {
+    const char* env = std::getenv("STEAL_PROFILE");
+    if (!env) return;
+    double from = std::atof(env), span = std::strchr(env, ',') ? std::atof(std::strchr(env, ',') + 1) : 10;
+    HANDLE me = nullptr;
+    DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &me, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    std::thread([me, from, span] {
+        auto t0 = std::chrono::steady_clock::now();
+        std::this_thread::sleep_for(std::chrono::duration<double>(from));
+        std::vector<uint64_t> rips;
+        timeBeginPeriod(1);
+        while (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() < from + span) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            if (!g_in_draw) continue;
+            if (SuspendThread(me) == DWORD(-1)) break;
+            CONTEXT c{};
+            c.ContextFlags = CONTEXT_FULL;
+            if (GetThreadContext(me, &c)) {
+                // the first frames up the stack (a sample in a DLL: who called it), 0 after each sample
+                rips.push_back(c.Rip);
+                for (int i = 0; i < 4; i++) {
+                    DWORD64 image = 0;
+                    PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(c.Rip, &image, nullptr);
+                    if (!fn) {
+                        c.Rip = *reinterpret_cast<DWORD64*>(c.Rsp);
+                        c.Rsp += 8;
+                    } else {
+                        void* data;
+                        DWORD64 frame;
+                        RtlVirtualUnwind(UNW_FLAG_NHANDLER, image, c.Rip, fn, &c, &data, &frame, nullptr);
+                    }
+                    rips.push_back(c.Rip);
+                }
+                rips.push_back(0);
+            }
+            ResumeThread(me);
+        }
+        timeEndPeriod(1);
+        if (FILE* f = std::fopen("profile.txt", "w")) {
+            std::fprintf(f, "base %p\n", static_cast<void*>(GetModuleHandleW(nullptr)));
+            for (uint64_t r : rips) {
+                HMODULE m = nullptr;
+                char name[MAX_PATH] = "?";
+                if (r && GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                            reinterpret_cast<LPCSTR>(r), &m))
+                    GetModuleFileNameA(m, name, MAX_PATH);
+                const char* leaf = std::strrchr(name, '\\') ? std::strrchr(name, '\\') + 1 : name;
+                std::fprintf(f, "%llx %s+%llx\n", static_cast<unsigned long long>(r), leaf,
+                             static_cast<unsigned long long>(r - reinterpret_cast<uint64_t>(m)));
+            }
+            std::fclose(f);
+        }
+        LOGW("profile: %zu samples", rips.size());
+    }).detach();
+}
+X86_EXTERN_FUNC(__imp__sub_00016730);
+X86_FUNC(sub_00016730) {
+    static bool started = (StartProfiler(), true);
+    (void)started;
+    g_in_draw = true;
+    auto start = std::chrono::steady_clock::now();
+    __imp__sub_00016730(ctx, base);
+    g_in_draw = false;
+    GuestTime(g_draw_time, start);
+}
 X86_EXTERN_FUNC(__imp__sub_00023800);
 X86_FUNC(sub_00023800) {
     g_game_state = kernel::R32(ctx.ecx + 0x4C);
@@ -899,7 +994,10 @@ X86_FUNC(sub_00023800) {
     g_smooth_frame = ui::g_frame_rate >= 60;
     if (!g_smooth_frame) g_clock_running = false;
     d3d::SetIntervalOverride(g_smooth_frame ? 1 : 0);
+    auto start = StepClock::now();
     __imp__sub_00023800(ctx, base);
+    GuestTime(g_frame_time, start);
+    GuestTimes();
     d3d::SetIntervalOverride(0);
     g_smooth_frame = false;
 }
@@ -909,7 +1007,10 @@ X86_FUNC(sub_00019180) {
     constexpr uint32_t kIndexArg = 4;
     if (g_smooth_frame) kernel::W32(ctx.esp + kIndexArg, g_index);
     g_index = (kernel::R32(ctx.esp + kIndexArg) + 1) & 1;
+    auto start = StepClock::now();
     __imp__sub_00019180(ctx, base);
+    GuestTime(g_tick_time, start);
+    g_ticks++;
 }
 X86_EXTERN_FUNC(__imp__sub_00031560);
 X86_FUNC(sub_00031560) {
