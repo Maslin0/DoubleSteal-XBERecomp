@@ -884,9 +884,11 @@ StepClock::time_point g_clock_start;
 double g_steps = 0;    // the logic's steps since the clock started
 uint32_t g_index = 0;  // the next TickScene's index
 }  // namespace
+uint32_t g_frame_object = 0;  // FUN_00023800's object, +0x4C the game's state
 X86_EXTERN_FUNC(__imp__sub_00023800);
 X86_FUNC(sub_00023800) {
     g_game_state = kernel::R32(ctx.ecx + 0x4C);
+    g_frame_object = ctx.ecx;
     if (std::getenv("STEAL_STATE_LOG")) {
         static uint32_t was = ~0u, scene_was = ~0u;
         uint32_t state = kernel::R32(ctx.ecx + 0x4C), scene = kernel::R32(ctx.ecx + 0x0C);
@@ -923,8 +925,11 @@ X86_FUNC(sub_00031560) {
     g_steps += 1;
     double due = std::chrono::duration<double>(now - g_clock_start).count() * kStepHz;
     if (due - g_steps > kMaxBehind) g_steps = std::floor(due);
-    // ebx counts the loop's steps: the loop ends after this one unless the logic is behind
-    if (ctx.ebx == 0 && due < g_steps + 1) ctx.ebx = 1;
+    // ebx counts the loop's steps: the loop ends after this one unless the logic is behind, or the game's state
+    // changed in it: the next state's first step readies what the frame draws (leaving a mission the race's scene is
+    // gone, drawing it before that step reads freed objects), as at 30 where every frame has two
+    bool changed = kernel::R32(g_frame_object + 0x4C) != g_game_state;
+    if (ctx.ebx == 0 && due < g_steps + 1 && !changed) ctx.ebx = 1;
     // STEAL_STEP_LOG=1: the logic's steps and the frames each second into steps.log (60 and 60 at full speed)
     static const bool log = std::getenv("STEAL_STEP_LOG") != nullptr;
     static StepClock::time_point last = now;
