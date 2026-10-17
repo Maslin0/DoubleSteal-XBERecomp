@@ -272,17 +272,18 @@ X86_FUNC(sub_0010AB80) {
     ui::OptionsRow(kRowY0 + kNewRow * kNewStep, g_on_row, light);
 }
 
-// FUN_00031B30 (present, swap) ends every frame of every loop: Recomp Settings' sounds played from here, on the
-// game's thread
-X86_EXTERN_FUNC(__imp__sub_00031B30);
-X86_FUNC(sub_00031B30) {
+// FUN_000123A0 is the game's main loop, once a frame whatever the scene: it reads the pads and runs the scene's frame.
+// Recomp Settings' sounds are played from here, on the game's thread (the presents of some screens, FUN_00031B30's
+// among them, are not every frame's)
+X86_EXTERN_FUNC(__imp__sub_000123A0);
+X86_FUNC(sub_000123A0) {
     // the player reads its banks' table (+0x1A8): none yet early in the boot, the sounds then dropped
     for (uint32_t id; ui::TakeSound(id);)
         if (kernel::R32(kSoundPlayer + 0x1A8)) {
             LOGI("ui sound %04X", id);
             Sound(ctx, id);
         }
-    __imp__sub_00031B30(ctx, base);
+    __imp__sub_000123A0(ctx, base);
 }
 
 X86_EXTERN_FUNC(__imp__sub_000EBD00);

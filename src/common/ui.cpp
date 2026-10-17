@@ -21,6 +21,7 @@
 
 #include "app/app.h"
 #include "core/input.h"
+#include "core/log.h"
 
 namespace debug {
 void Pad(int port, input::Pad& pad);
@@ -848,6 +849,7 @@ std::mutex g_sound_lock;
 std::vector<uint32_t> g_sounds;
 void Play(uint32_t id) {
     std::lock_guard lock(g_sound_lock);
+    LOGI("ui sound %04X queued (%zu waiting)", id, g_sounds.size());
     if (g_sounds.size() < 8) g_sounds.push_back(id);
 }
 
