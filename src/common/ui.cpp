@@ -889,6 +889,9 @@ const Row kGraphics[] = {
     {"SMAA", "Smooths jagged edges over the whole picture",
      [] { return std::string(app::Get().smaa ? "ON" : "OFF"); },
      [](int dir) { return Flag(app::Get().smaa, dir); }},
+    {"ASYNC SHADERS", "New shaders compile in the background instead of stalling",
+     [] { return std::string(app::Get().async_shaders ? "ON" : "OFF"); },
+     [](int dir) { return Flag(app::Get().async_shaders, dir); }},
     {"ANISOTROPIC FILTERING", "Sharper road and ground textures far away",
      [] {
          uint32_t a = app::Get().aniso;
