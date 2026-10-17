@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -841,6 +842,15 @@ const Row kGeneral[] = {
 // KEYBOARD: whether the keyboard works controller 1, a row for each of the controller's controls with its keys, and
 // the keys back as they were. On a control's row OK waits for a key and sets it, right waits for a second one and
 // left takes the second off; Esc (or B) leaves the waiting.
+// The game's menu sounds (its sound player's ids), played by the game's thread (hooks.cpp takes them each frame)
+constexpr uint32_t kSoundCursor = 0x2C03, kSoundOk = 0x2001, kSoundBack = 0x2002, kSoundValue = 0x2003;
+std::mutex g_sound_lock;
+std::vector<uint32_t> g_sounds;
+void Play(uint32_t id) {
+    std::lock_guard lock(g_sound_lock);
+    if (g_sounds.size() < 8) g_sounds.push_back(id);
+}
+
 int g_capture = -1;       // the control waiting for a key
 int g_capture_slot = 0;   // its first key or its second
 Clock::time_point g_capture_at;
@@ -991,7 +1001,10 @@ void Turn(Key k, int rows);
 void Press(Key k) {
     if (g_veil != Veil::kNone) return;  // not while the page comes or goes
     if (g_capture >= 0) {  // waiting for a key: B leaves it
-        if (k == kBack) g_capture = -1;
+        if (k == kBack) {
+            g_capture = -1;
+            Play(kSoundBack);
+        }
         return;
     }
     int rows = g_section < 0 ? kSectionCount + 1 : kSections[g_section].count;
@@ -1001,20 +1014,38 @@ void Press(Key k) {
     else if (g_row != row) g_chosen_at = Clock::now();
 }
 
+// with the game's sounds: the cursor moving, a value changing, OK, back
 void Turn(Key k, int rows) {
     switch (k) {
-        case kUp: g_row = (g_row + rows - 1) % rows; break;
-        case kDown: g_row = (g_row + 1) % rows; break;
+        case kUp:
+            g_row = (g_row + rows - 1) % rows;
+            Play(kSoundCursor);
+            break;
+        case kDown:
+            g_row = (g_row + 1) % rows;
+            Play(kSoundCursor);
+            break;
         case kLeft:
         case kRight:
-            if (g_section >= 0 && kSections[g_section].rows[g_row].step(k == kRight ? 1 : -1)) app::Save();
+            if (g_section >= 0 && kSections[g_section].rows[g_row].step(k == kRight ? 1 : -1)) {
+                app::Save();
+                Play(kSoundValue);
+            } else if (g_capture >= 0) {
+                Play(kSoundOk);  // waiting for a second key
+            }
             break;
         case kOk:
             if (g_section < 0) {
-                if (g_row == kSectionCount) Close();
-                else g_section = g_row, g_row = 0;
+                if (g_row == kSectionCount) {
+                    Play(kSoundBack);
+                    Close();
+                } else {
+                    g_section = g_row, g_row = 0;
+                    Play(kSoundOk);
+                }
             } else if (kSections[g_section].rows[g_row].keys) {
                 kSections[g_section].rows[g_row].step(2);  // waits for its first key
+                Play(kSoundOk);
             } else {
                 // A moves the value on, from the last back to the first
                 const Row& r = kSections[g_section].rows[g_row];
@@ -1022,9 +1053,11 @@ void Turn(Key k, int rows) {
                     while (r.step(-1)) {
                     }
                 app::Save();
+                Play(kSoundValue);
             }
             break;
         case kBack:
+            Play(kSoundBack);
             if (g_section < 0) Close();
             else g_row = g_section, g_section = -1, g_first = 0;
             break;
@@ -1145,6 +1178,14 @@ bool HideOptions() { return PageUp() && g_over_game; }
 
 bool TakeOptionsReplay() { return g_replay.exchange(false); }
 
+bool TakeSound(uint32_t& id) {
+    std::lock_guard lock(g_sound_lock);
+    if (g_sounds.empty()) return false;
+    id = g_sounds.front();
+    g_sounds.erase(g_sounds.begin());
+    return true;
+}
+
 void OptionsShown() { g_options_seen = Clock::now().time_since_epoch().count(); }
 
 void Window(void*) {
@@ -1213,6 +1254,9 @@ bool Message(void*, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t*) {
             if (k[0] == k[1]) k[1] = 0;
             if (!k[0]) std::swap(k[0], k[1]);
             app::Save();
+            Play(kSoundValue);
+        } else {
+            Play(kSoundBack);
         }
         g_capture = -1;
         return true;
@@ -1222,8 +1266,13 @@ bool Message(void*, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t*) {
     if (msg != WM_KEYDOWN && !(msg == WM_SYSKEYDOWN && wp == VK_F10)) return false;
     std::lock_guard lock(app::UiLock());
     if (wp == VK_F10) {
-        if (g_open) Close();
-        else Open();
+        if (g_open) {
+            Play(kSoundBack);
+            Close();
+        } else {
+            Play(kSoundOk);
+            Open();
+        }
         return true;
     }
     if (!g_open) return false;
@@ -1263,9 +1312,11 @@ void Pad(int port, input::Pad& pad) {
     bool y_pressed = y && !y_held;
     y_held = y;
     if (sticks) {
+        Play(g_open ? kSoundBack : kSoundOk);
         if (g_open) Close();
         else Open();
     } else if (!g_open && y_pressed && OptionsUp()) {
+        Play(kSoundOk);
         Open();
         g_swallow = true;
     } else if (g_open) {

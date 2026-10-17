@@ -24,6 +24,7 @@ void OptionsRow(int y, bool chosen, float alpha);
 void OpenPage();
 bool HideOptions();  // Recomp Settings is drawn over the OPTIONS page: its rows and title go meanwhile
 bool TakeOptionsReplay();  // Recomp Settings closed over the OPTIONS page: the page comes in again
+bool TakeSound(uint32_t& id);  // a menu sound Recomp Settings asks for, for the game to play
 }
 
 // XMVDecoder_Play(decoder, flags, rect), __stdcall: the library's own player decodes the movie (LOGO1.XMV, the
@@ -269,6 +270,19 @@ X86_FUNC(sub_0010AB80) {
     leaving = kernel::R32(menu + 0x20) == 2 ? leaving + 1 : 0;
     float light = std::max(0.0f, 1 - leaving / 8.0f);
     ui::OptionsRow(kRowY0 + kNewRow * kNewStep, g_on_row, light);
+}
+
+// FUN_00031B30 (present, swap) ends every frame of every loop: Recomp Settings' sounds played from here, on the
+// game's thread
+X86_EXTERN_FUNC(__imp__sub_00031B30);
+X86_FUNC(sub_00031B30) {
+    // the player reads its banks' table (+0x1A8): none yet early in the boot, the sounds then dropped
+    for (uint32_t id; ui::TakeSound(id);)
+        if (kernel::R32(kSoundPlayer + 0x1A8)) {
+            LOGI("ui sound %04X", id);
+            Sound(ctx, id);
+        }
+    __imp__sub_00031B30(ctx, base);
 }
 
 X86_EXTERN_FUNC(__imp__sub_000EBD00);
