@@ -22,6 +22,7 @@
 #include "app/app.h"
 #include "core/input.h"
 #include "core/log.h"
+#include "common/controls.h"
 
 namespace debug {
 void Pad(int port, input::Pad& pad);
@@ -860,61 +861,42 @@ Clock::time_point g_capture_at;
 template <int C>
 std::string Keys() {
     if (g_capture == C) return "PRESS A KEY";
-    const auto& k = input::Keys()[C];
-    std::string first = input::KeyName(k[0]), second = input::KeyName(k[1]);
-    if (first.empty()) first.swap(second);
-    if (first.empty()) return "NONE";
-    return second.empty() ? first : first + ", " + second;
+    return controls::Keys(C);
 }
 template <int C>
 bool KeyStep(int dir) {
-    if (dir < 0) {  // the second key off
-        auto& k = input::Keys()[C];
-        if (!k[1]) return false;
-        k[1] = 0;
-        return true;
-    }
+    if (dir < 0) return controls::ClearSecond(C);  // the second key off
     g_capture = C;
     g_capture_slot = dir > 1 ? 0 : 1;  // OK (2) the first, right (1) the second
     g_capture_at = Clock::now();
     return false;
 }
-#define KEY_ROW(name, c) {name, "OK sets its key, right adds a second, left takes the second off", Keys<c>, KeyStep<c>, true}
+#define KEY_ROW(c) \
+    {controls::Label(c), "OK sets its key, right adds a second, left takes the second off", Keys<c>, KeyStep<c>, true}
 
 const Row kKeyboard[] = {
     {"KEYBOARD", "The keyboard works controller 1 while the game window has the focus",
      [] { return std::string(app::Get().keyboard ? "ON" : "OFF"); },
      [](int dir) { return Flag(app::Get().keyboard, dir); }},
-    KEY_ROW("LEFT STICK LEFT", 0),
-    KEY_ROW("LEFT STICK RIGHT", 1),
-    KEY_ROW("LEFT STICK UP", 2),
-    KEY_ROW("LEFT STICK DOWN", 3),
-    KEY_ROW("RIGHT TRIGGER", 4),
-    KEY_ROW("LEFT TRIGGER", 5),
-    KEY_ROW("A", 6),
-    KEY_ROW("B", 7),
-    KEY_ROW("X", 8),
-    KEY_ROW("Y", 9),
-    KEY_ROW("BLACK", 10),
-    KEY_ROW("WHITE", 11),
-    KEY_ROW("START", 12),
-    KEY_ROW("BACK", 13),
-    KEY_ROW("D-PAD UP", 14),
-    KEY_ROW("D-PAD DOWN", 15),
-    KEY_ROW("D-PAD LEFT", 16),
-    KEY_ROW("D-PAD RIGHT", 17),
-    KEY_ROW("RIGHT STICK UP", 18),
-    KEY_ROW("RIGHT STICK DOWN", 19),
-    KEY_ROW("RIGHT STICK LEFT", 20),
-    KEY_ROW("RIGHT STICK RIGHT", 21),
-    KEY_ROW("LEFT THUMB", 22),
-    KEY_ROW("RIGHT THUMB", 23),
+    KEY_ROW(0),
+    KEY_ROW(1),
+    KEY_ROW(2),
+    KEY_ROW(3),
+    KEY_ROW(4),
+    KEY_ROW(5),
+    KEY_ROW(6),
+    KEY_ROW(7),
+    KEY_ROW(8),
+    KEY_ROW(9),
+    KEY_ROW(10),
+    KEY_ROW(11),
+    KEY_ROW(12),
+    KEY_ROW(13),
+    KEY_ROW(14),
+    KEY_ROW(15),
+    KEY_ROW(16),
     {"RESET KEYS", "All the keys back as they were at first", [] { return std::string(); },
-     [](int dir) {
-         if (dir <= 0 || input::Keys() == input::DefaultKeys()) return false;
-         input::Keys() = input::DefaultKeys();
-         return true;
-     }},
+     [](int dir) { return dir > 0 && controls::Reset(); }},
 };
 #undef KEY_ROW
 
@@ -1251,10 +1233,7 @@ bool Message(void*, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t*) {
         if (vk == VK_CONTROL) vk = extended ? VK_RCONTROL : VK_LCONTROL;
         if (vk == VK_MENU) vk = extended ? VK_RMENU : VK_LMENU;
         if (vk != VK_ESCAPE && vk != VK_F10) {
-            auto& k = input::Keys()[size_t(g_capture)];
-            k[size_t(g_capture_slot)] = vk;
-            if (k[0] == k[1]) k[1] = 0;
-            if (!k[0]) std::swap(k[0], k[1]);
+            controls::SetKey(size_t(g_capture), g_capture_slot, vk);
             app::Save();
             Play(kSoundValue);
         } else {

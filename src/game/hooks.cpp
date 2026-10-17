@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -13,8 +14,15 @@
 #include "kernel/kernel.h"
 #include "xdk/d3d8.h"
 #include "xdk/hle.h"
+#include "common/controls.h"
 
 X86_EXTERN_FUNC(__imp__sub_00177B8E);
+
+std::chrono::steady_clock::time_point g_last_tick;  // TickScene last ran
+// the game's state (its frame FUN_00023800's object +0x4C): 9 a race being driven (its countdown too); 1 and 2 a
+// cutscene, 7 a briefing, 8 the start of a mission, 10 the pause menu (logged with STEAL_STATE_LOG=1)
+std::atomic<uint32_t> g_game_state{0};
+constexpr uint32_t kStateRacing = 9;
 
 namespace ui {
 extern bool g_skip_intros;  // Recomp Settings > GENERAL > SKIP INTROS
@@ -275,8 +283,14 @@ X86_FUNC(sub_0010AB80) {
 // FUN_000123A0 is the game's main loop, once a frame whatever the scene: it reads the pads and runs the scene's frame.
 // Recomp Settings' sounds are played from here, on the game's thread (the presents of some screens, FUN_00031B30's
 // among them, are not every frame's)
+// the game's CONTROLLER TYPE for controller 1 (its options at 0x1D2410 + 0xDC, FUN_0001E3A0: +0 the type, 0 A, 1 B)
+constexpr uint32_t kControllerType = 0x1D24EC;
 X86_EXTERN_FUNC(__imp__sub_000123A0);
 X86_FUNC(sub_000123A0) {
+    // the keys as the game's actions under its controller type; the menus' keys while no race is running
+    bool racing = g_game_state == kStateRacing &&
+                  std::chrono::steady_clock::now() - g_last_tick < std::chrono::milliseconds(250);
+    controls::Update(int(kernel::R32(kControllerType) & 0xFFFF), racing);
     // the player reads its banks' table (+0x1A8): none yet early in the boot, the sounds then dropped
     for (uint32_t id; ui::TakeSound(id);)
         if (kernel::R32(kSoundPlayer + 0x1A8)) {
@@ -598,6 +612,14 @@ uint32_t g_index = 0;  // the next TickScene's index
 }  // namespace
 X86_EXTERN_FUNC(__imp__sub_00023800);
 X86_FUNC(sub_00023800) {
+    g_game_state = kernel::R32(ctx.ecx + 0x4C);
+    if (std::getenv("STEAL_STATE_LOG")) {
+        static uint32_t was = ~0u, scene_was = ~0u;
+        uint32_t state = kernel::R32(ctx.ecx + 0x4C), scene = kernel::R32(ctx.ecx + 0x0C);
+        uint32_t sstate = scene ? kernel::R32(scene + 0x1F4) : ~0u;
+        if (state != was || sstate != scene_was) LOGW("state game %u scene %u", state, sstate);
+        was = state, scene_was = sstate;
+    }
     g_smooth_frame = ui::g_frame_rate >= 60;
     if (!g_smooth_frame) g_clock_running = false;
     d3d::SetIntervalOverride(g_smooth_frame ? 1 : 0);
@@ -607,6 +629,7 @@ X86_FUNC(sub_00023800) {
 }
 X86_EXTERN_FUNC(__imp__sub_00019180);
 X86_FUNC(sub_00019180) {
+    g_last_tick = std::chrono::steady_clock::now();
     constexpr uint32_t kIndexArg = 4;
     if (g_smooth_frame) kernel::W32(ctx.esp + kIndexArg, g_index);
     g_index = (kernel::R32(ctx.esp + kIndexArg) + 1) & 1;

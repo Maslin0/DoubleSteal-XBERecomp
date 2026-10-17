@@ -1,5 +1,6 @@
 #include "app/app.h"
 #include "core/input.h"
+#include "common/controls.h"
 
 namespace apu {
 void Init();
@@ -34,8 +35,8 @@ const app::GameInfo app::kGame = {
                 {"shadow_resolution", nullptr, &shadows::g_resolution},
                 {"shadow_filter", &shadows::g_filter, nullptr},
                 {"frame_rate", nullptr, &ui::g_frame_rate}},                      // game settings kept in the settings file
-    .load = nullptr,                      // reads more from the settings file's toml::table
-    .save = nullptr,                      // writes more into it
+    .load = controls::Load,               // reads more from the settings file's toml::table
+    .save = controls::Save,               // writes more into it
     .init = debug::Init,                     // after the settings load, before the window and boot
     .loaded = apu::Init,                  // image in memory, before its entry point runs
     .window = ui::Window,                  // the game window is up
