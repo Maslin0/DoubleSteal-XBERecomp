@@ -56,7 +56,13 @@ const ImU32 kLine = IM_COL32(150, 150, 150, 255);
 const ImU32 kDiamond = IM_COL32(19, 19, 19, 255);
 
 ImFont* g_heavy = nullptr;  // Arial Black, slanted when drawn: the menu lettering
-ImFont* g_bold = nullptr;  // Arial Bold: the help line, the counter
+ImFont* g_bold = nullptr;  // Arial Bold: the counter, the help line without g_help
+// The game's help lines are sprites (Options.xpr) of Arial Bold rasterised small, capitals 15 texels high, with a
+// one texel dark edge, drawn magnified (filtered) 2.99 x 2.14 screen pixels a texel at 1080p: Arial Bold at that size,
+// drawn the same way, any line comes out as theirs
+ImFont* g_help = nullptr;
+constexpr float kHelpPx = 23.4f;                       // the font's size in texels
+constexpr float kHelpTexelX = 1.68f, kHelpTexelY = 1.60f;  // frame units a texel, before the widescreen widening
 constexpr float kFontPx = 64;
 
 // --- the game's lettering ------------------------------------------------------------------------------------------
@@ -363,14 +369,11 @@ void Text(ImDrawList* dl, const Frame& f, ImFont* font, float px, float x, float
     }
 }
 
-// the help line: the game's Arial Bold in orange with a black edge all round
-// the game's help line: its own Arial-like font, wider than Arial Bold by an eighth, drawn small and stretched up so
-// its edges are soft: Arial Bold widened as much, its letters drawn around their place at a share of their light
+double Frames(Clock::time_point since);
+
 // A new help line comes in as the game's (the OPTIONS page's timelines): over 15 frames it slides 100 of the
 // page's units (2.04 frame units each) from the left, slowing as the square of what is left, and brightens from
 // nothing. A line goes again once it was not drawn for a while (its row left).
-double Frames(Clock::time_point since);
-
 float HelpIn(const std::string& s, float& slide) {
     static std::string last;
     static Clock::time_point since, drawn;
@@ -382,22 +385,24 @@ float HelpIn(const std::string& s, float& slide) {
     return t;
 }
 
+// the help line: the game's Arial Bold in orange with a black edge all round
 void Help(ImDrawList* dl, const Frame& f, const std::string& s, float alpha = 1) {
-    ImFont* font = g_bold ? g_bold : ImGui::GetFont();
-    float size = 32 * f.s, widen = Widen() * 1.13f;
     float slide;
     alpha *= HelpIn(s, slide);
+    ImFont* font = g_help ? g_help : g_bold ? g_bold : ImGui::GetFont();
+    float sy = kHelpTexelY * f.s, sx = kHelpTexelX * Widen() * f.s;
+    float size = kHelpPx * sy, widen = sx / sy;
     ImVec2 ext = font->CalcTextSizeA(size, FLT_MAX, 0, s.c_str());
+    // a line longer than the sprites' 512 texels is squeezed into them, as the game's longest
+    constexpr float kHelpTexels = 500;
+    widen = std::min(widen, kHelpTexels * sx / std::max(ext.x, 1.0f));
     ImVec2 at = f.P(720 + slide, 655);
     at = {at.x - ext.x * widen / 2, at.y - ext.y / 2};
     int first = dl->VtxBuffer.Size;
-    float e = 2 * f.s;
-    const ImVec2 edge[] = {{-e, 0}, {e, 0}, {0, -e}, {0, e}, {-e, -e}, {e, -e}, {-e, e}, {e, e}};
+    // the edge a texel around (x offsets before the widening)
+    const ImVec2 edge[] = {{-sy, 0}, {sy, 0}, {0, -sy}, {0, sy}, {-sy, -sy}, {sy, -sy}, {-sy, sy}, {sy, sy}};
     for (ImVec2 o : edge) dl->AddText(font, size, {at.x + o.x, at.y + o.y}, Fade(IM_COL32(0, 0, 0, 255), alpha), s.c_str());
-    float soft = 0.9f * f.s;
-    const ImVec2 blur[] = {{-soft, 0}, {soft, 0}, {0, -soft}, {0, soft}};
-    for (ImVec2 o : blur) dl->AddText(font, size, {at.x + o.x, at.y + o.y}, Fade(kHelp, alpha * 0.3f), s.c_str());
-    dl->AddText(font, size, at, Fade(kHelp, alpha * 0.75f), s.c_str());
+    dl->AddText(font, size, at, Fade(kHelp, alpha), s.c_str());
     for (int i = first; i < dl->VtxBuffer.Size; i++) dl->VtxBuffer[i].pos.x = at.x + (dl->VtxBuffer[i].pos.x - at.x) * widen;
 }
 
@@ -965,6 +970,15 @@ void Window(void*) {
     };
     g_heavy = load(L"ariblk.ttf");
     g_bold = load(L"arialbd.ttf");
+    {
+        // rasterised at the sprites' size, no finer: magnified it softens as theirs
+        char path[MAX_PATH * 2];
+        std::snprintf(path, sizeof(path), "%ls\\Fonts\\arialbd.ttf", dir);
+        ImFontConfig c;
+        c.OversampleH = c.OversampleV = 1;
+        c.PixelSnapH = true;
+        if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) g_help = io.Fonts->AddFontFromFileTTF(path, kHelpPx, &c);
+    }
     // the game's lettering, over an Arial Black of a row's size for what it has not
     ImFont* rows = load(L"ariblk.ttf", kCell);
     ImFont* titles = load(L"ariblk.ttf", kCell);
