@@ -81,8 +81,9 @@ std::mutex g_prompt_lock;
 std::vector<Prompt> g_prompts_next, g_prompts;
 Clock::time_point g_prompts_at;  // the game frame that drew them began: a loading screen's loop runs no such frames
 float g_prompts_dim = 1, g_prompts_dim_next = 1;  // under a dialog's backdrop: the light they keep
-constexpr float kPromptScale = 0.6f;  // the prompts' words against the rows' lettering
+constexpr float kPromptScale = 0.78f;  // the prompts' words against the rows' lettering
 constexpr int kPromptGrey = 205;      // the prompts' words' grey, as they look
+constexpr int kPromptGreyTall = 255;  // and beside two rows of words, whiter
 
 // --- the game's lettering ------------------------------------------------------------------------------------------
 // The game's menu rows and page titles are sprites of whole words in data\screen\*.xpr (DXT textures): the rows
@@ -534,7 +535,9 @@ void PromptsDraw() {
         float x = 720 + (p.x - 320) * PageUnit(), y = 706.6f + (p.y + p.h / 2 - 435) * kTexel;
         // the words are their sprite's grey (166 at most, 1080p) times the colour: the key as light
         float keep = p.over ? 1 : dim;
-        auto lit = [&](int shift) { return int(((p.colour >> shift) & 0xFF) * kPromptGrey / 255 * keep + 0.5f); };
+        // two rows of words beside it (MISSION SELECT's Y): those words are whiter
+        int grey = p.h > 40 ? kPromptGreyTall : kPromptGrey;
+        auto lit = [&](int shift) { return std::min(255, int(((p.colour >> shift) & 0xFF) * grey / 255 * keep + 0.5f)); };
         ImU32 c = IM_COL32(lit(16), lit(8), lit(0), p.colour >> 24);
         PromptLettering(dl, f, x, y, c, p.key);
     }

@@ -380,8 +380,8 @@ void DrawPrompt(X86Context& ctx, uint8_t* base, void (*imp)(X86Context&, uint8_t
     }
     uint16_t u0 = U16(sprite + 4), w = U16(sprite + 0xC), h = U16(sprite + 0xE);
     // the button and its gap: a circle a little under the sprite's height (on Options.xpr: 30 high, the word from 28);
-    // beside two rows of words (MISSION SELECT's Y, 60 high) the words from 32
-    uint16_t cut = uint16_t(std::min<int>({h - 2, 32, w - 1}));
+    // beside two rows of words (MISSION SELECT's Y, 60 high) the words from 29 (the C of CLEAR leaning left)
+    uint16_t cut = uint16_t(std::min<int>({h - 2, 29, w - 1}));
     float& x = *static_cast<float*>(kernel::HostPtr(el + 0x18));
     float y = *static_cast<float*>(kernel::HostPtr(el + 0x1C));
     float at = x;
