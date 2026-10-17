@@ -506,8 +506,24 @@ float Lettering(ImDrawList* dl, const Frame& f, float x, float y, ImU32 colour, 
 
 // a prompt's key in brackets, (x, y) its left and middle; its width. The closing bracket stands a little off, the
 // letters' slant leaning their tops into it
+// A letter the game's rows lack (Q, J, Z) comes from the host face, solid where the game's are shaded: dimmer.
 float PromptLettering(ImDrawList* dl, const Frame& f, float x, float y, ImU32 colour, const std::string& key) {
-    float w = Lettering(dl, f, x, y, colour, "(" + key, kStart, kPromptScale);
+    auto cut = [](char c) {
+        if (c < 'A' || c > 'Z') return true;
+        for (const Cut& k : kRowCuts)
+            if (k.ch == c) return true;
+        return false;
+    };
+    ImU32 host = (colour & IM_COL32_A_MASK) | IM_COL32(((colour >> IM_COL32_R_SHIFT) & 0xFF) * 3 / 4,
+                                                       ((colour >> IM_COL32_G_SHIFT) & 0xFF) * 3 / 4,
+                                                       ((colour >> IM_COL32_B_SHIFT) & 0xFF) * 3 / 4, 0);
+    float w = Lettering(dl, f, x, y, colour, "(", kStart, kPromptScale);
+    for (size_t i = 0; i < key.size();) {
+        size_t j = i;
+        while (j < key.size() && cut(key[j]) == cut(key[i])) j++;
+        w += Lettering(dl, f, x + w, y, cut(key[i]) ? colour : host, key.substr(i, j - i), kStart, kPromptScale);
+        i = j;
+    }
     float gap = 2.5f * kTexel * kPromptScale;
     return w + gap + Lettering(dl, f, x + w + gap, y, colour, ")", kStart, kPromptScale);
 }
