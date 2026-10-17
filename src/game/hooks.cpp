@@ -25,7 +25,7 @@ std::vector<std::pair<int, float>> g_row_rooms_last;  // the last frame's, each 
 // the game's state (its frame FUN_00023800's object +0x4C): 9 a race being driven (its countdown too); 1 and 2 a
 // cutscene, 7 a briefing, 8 the start of a mission, 10 the pause menu (logged with STEAL_STATE_LOG=1)
 std::atomic<uint32_t> g_game_state{0};
-constexpr uint32_t kStateRacing = 9;
+constexpr uint32_t kStateRacing = 9, kStatePause = 10;
 
 namespace ui {
 extern bool g_skip_intros;  // Recomp Settings > GENERAL > SKIP INTROS
@@ -180,13 +180,18 @@ bool NewY(uint16_t& y) {
     return false;
 }
 
-// each description once: it outlives the page. def: the page's description, +4 its elements, +8 theirs (0x24
+// def: the page's description, +4 its elements, +8 theirs (0x24
 // each, y at +0xC); +0x14 its timelines, +0x18 theirs (12 bytes, +8 their commands). A move command (type 3) holds
 // where it takes its element from and to (x, y at +0x18, +0x1A and +0x1C, +0x1E), which the element keeps after.
+// Done when RESET TO DEFAULT (row 7) is still in its place: a description loaded again comes as it was.
 void Relayout(uint32_t def) {
-    static std::vector<uint32_t> done;
-    if (std::find(done.begin(), done.end(), def) != done.end()) return;
-    done.push_back(def);
+    bool fresh = false;
+    for (int i = 0; i < int(kernel::R32(def + 4)); i++) {
+        uint32_t d = kernel::R32(def + 8) + i * 0x24;
+        if (!std::strcmp(static_cast<const char*>(kernel::HostPtr(kernel::R32(d))), "ResetDefault"))
+            fresh = U16(d + 0xC) == kRowY0 + 7 * kRowStep;
+    }
+    if (!fresh) return;
     for (int i = 0; i < int(kernel::R32(def + 4)); i++) NewY(U16(kernel::R32(def + 8) + i * 0x24 + 0xC));
     for (int t = 0; t < int(kernel::R32(def + 0x14)); t++) {
         uint32_t tl = kernel::R32(def + 0x18) + t * 12;  // +4 its commands, +8 pointers to them
@@ -225,7 +230,9 @@ X86_FUNC(sub_0010AB80) {
     __imp__sub_0010AB80(ctx, base);
     uint32_t page = kernel::R32(menu + 0x24);
     bool up = kernel::R32(menu + 0x18) == 1 && page && kernel::R32(page) == kOptionPageVtable;
-    if (!up) return;
+    // the pause menu's OPTIONS keep their rows: Recomp Settings is F10's there
+    if (g_game_state == kStatePause) g_page = 0;
+    if (!up || g_game_state == kStatePause) return;
     if (page != g_page) {
         g_page = page, g_on_row = false;
         if (std::getenv("STEAL_PAGE_DUMP")) {
@@ -411,9 +418,11 @@ void DrawPrompt(X86Context& ctx, uint8_t* base, void (*imp)(X86Context&, uint8_t
         int sheet_w = int(std::lround(4096 / upt)), row = int(std::lround(v0 / vpt)), left = int(std::lround(u0 / upt));
         for (const Pair& p : kPairs)
             if (p.sheet_w == sheet_w && std::abs(p.row - row) <= 4) {
-                // those within the sprite (M_B is the B BACK of A JUMP B BACK)
+                // those within the sprite (M_B is the B BACK of A JUMP B BACK), the sprite starting by a button (MainMenu.xpr
+                // has its own A OK on such a row)
                 for (const Key& k : p.keys)
                     if (k.circle - left >= -3 && k.circle - left < w) keys[n++] = {k.button, std::max(k.circle - left, 0), k.word - left};
+                if (n && keys[0].circle > 8) n = 0;
                 break;
             }
     }
@@ -616,7 +625,7 @@ X86_FUNC(sub_000EBD00) {
 // a page set up from its description (thiscall page (description, xpr)): the elements take their places from it here
 X86_EXTERN_FUNC(__imp__sub_000EC4D0);
 X86_FUNC(sub_000EC4D0) {
-    if (kernel::R32(ctx.ecx) == kOptionPageVtable) Relayout(kernel::R32(ctx.esp + 4));
+    if (kernel::R32(ctx.ecx) == kOptionPageVtable && g_game_state != kStatePause) Relayout(kernel::R32(ctx.esp + 4));
     __imp__sub_000EC4D0(ctx, base);
 }
 
