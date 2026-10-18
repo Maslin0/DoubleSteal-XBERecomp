@@ -23,6 +23,7 @@
 #include "core/input.h"
 #include "core/log.h"
 #include "common/controls.h"
+#include "kernel/disc.h"
 
 namespace debug {
 void Pad(int port, input::Pad& pad);
@@ -233,13 +234,93 @@ void Dxt(const uint8_t* src, size_t len, int w, int h, bool dxt5, Image& img) {
 }
 
 // an xpr's texture: its resource headers are found by their D3DCOMMON (a texture, one reference)
+// A screen's xpr out of the game's own archive (pkfiles0.us.pk on the disc), for a first start: the game unpacks it
+// into its hard disk cache (Z:\data\screen) only once it runs, after the lettering is made. The archive is a table of
+// 32 byte entries (name, cut to 19 characters, offset, size) and the files LZSS packed: a flag byte for eight items (bit set: a byte as it
+// is), else two bytes of 12 bit position in a 4096 byte window (written from 4080) and 4 bit length less 3.
+bool LoadFromPack(const char* name, size_t size, std::vector<uint8_t>& out) {
+    constexpr const char* kPack = "pkfiles0.us.pk";
+    std::vector<uint8_t> table(65536);
+    std::vector<uint8_t> packed;
+    const kernel::Disc* disc = kernel::MountedDisc();
+    const kernel::Disc::Entry* entry = disc ? disc->Find(kPack) : nullptr;
+    std::filesystem::path folder;
+    if (!entry) {
+        // the game's folder: assets beside the exe or above it
+        std::error_code ec;
+        for (auto dir = app::ExeDir(); !dir.empty(); dir = dir.parent_path()) {
+            if (std::filesystem::exists(dir / "assets" / kPack, ec)) {
+                folder = dir / "assets" / kPack;
+                break;
+            }
+            if (dir == dir.parent_path()) break;
+        }
+        if (folder.empty()) return false;
+    }
+    auto read = [&](uint64_t at, void* to, uint32_t len) -> bool {
+        if (entry) return disc->Read(*entry, at, to, len) == len;
+        FILE* f = _wfopen(folder.c_str(), L"rb");
+        if (!f) return false;
+        bool ok = _fseeki64(f, int64_t(at), SEEK_SET) == 0 && std::fread(to, 1, len, f) == len;
+        std::fclose(f);
+        return ok;
+    };
+    if (!read(0, table.data(), uint32_t(table.size()))) return false;
+    uint32_t at = 0, len = 0;
+    for (size_t o = 0; o + 32 <= table.size(); o += 32) {
+        if (!table[o]) break;
+        // names are cut to 19 characters (ControllerSetting.x)
+        const char* entry_name = reinterpret_cast<const char*>(&table[o]);
+        size_t n = strnlen(entry_name, 24), want = std::strlen(name);
+        if (_strnicmp(entry_name, name, n) != 0 || (n != want && n < 19)) continue;
+        std::memcpy(&at, &table[o + 24], 4);
+        std::memcpy(&len, &table[o + 28], 4);
+        break;
+    }
+    if (!len || len > (16u << 20)) return false;
+    packed.resize(len);
+    if (!read(at, packed.data(), len)) return false;
+    out.clear();
+    out.reserve(size);
+    uint8_t window[4096] = {};
+    uint32_t r = 4080, flags = 0;
+    for (size_t i = 0; out.size() < size && i < packed.size();) {
+        flags >>= 1;
+        if (!(flags & 0x100)) flags = packed[i++] | 0xFF00u;
+        if (flags & 1) {
+            if (i >= packed.size()) break;
+            uint8_t c = packed[i++];
+            out.push_back(c);
+            window[r] = c;
+            r = (r + 1) & 4095;
+        } else {
+            if (i + 1 >= packed.size()) break;
+            uint32_t lo = packed[i++], hi = packed[i++];
+            uint32_t pos = lo | ((hi & 0xF0) << 4), n = (hi & 0xF) + 3;
+            for (uint32_t k = 0; k < n; k++) {
+                uint8_t c = window[(pos + k) & 4095];
+                out.push_back(c);
+                window[r] = c;
+                r = (r + 1) & 4095;
+            }
+        }
+    }
+    return out.size() == size;
+}
+
 bool LoadSheet(const std::filesystem::path& dir, const Sheet& s, Image& img) {
-    FILE* file = _wfopen((dir / s.file).c_str(), L"rb");
-    if (!file) return false;
     std::vector<uint8_t> d(s.size + 1);
-    size_t got = std::fread(d.data(), 1, d.size(), file);
-    std::fclose(file);
-    if (got != s.size) return false;
+    FILE* file = _wfopen((dir / s.file).c_str(), L"rb");
+    size_t got = 0;
+    if (file) {
+        got = std::fread(d.data(), 1, d.size(), file);
+        std::fclose(file);
+    }
+    // not unpacked yet (a first start): from the archive
+    if (got != s.size) {
+        if (!LoadFromPack(s.file, s.size, d)) return false;
+        LOG_FIRST(1, "ui: the game's lettering from its archive (first start)");
+    }
     auto u32 = [&](size_t o) { return uint32_t(d[o] | d[o + 1] << 8 | d[o + 2] << 16 | uint32_t(d[o + 3]) << 24); };
     uint32_t header = u32(8);
     if (header >= s.size) return false;
@@ -324,7 +405,10 @@ void AddLettering(ImGuiIO& io, ImFont* rows, ImFont* titles) {
                                 "Z" / "data" / "screen";
     std::vector<Image> sheets(std::size(kSheets));
     for (size_t i = 0; i < std::size(kSheets); i++)
-        if (!LoadSheet(dir, kSheets[i], sheets[i])) return;
+        if (!LoadSheet(dir, kSheets[i], sheets[i])) {
+            LOGW("ui: no lettering, %s (texture %d) unreadable", kSheets[i].file, kSheets[i].texture);
+            return;
+        }
     for (auto [face, host] : {std::pair{&kRows, rows}, std::pair{&kTitles, titles}}) {
         for (const Cut* c = face->cuts; c != face->cuts + face->count; c++) {
             Image img = CutOut(sheets[c->sheet], *c, face->slant);

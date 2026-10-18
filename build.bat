@@ -1,8 +1,8 @@
 @echo off
 setlocal
-set "GAME_TITLE=Game Title"
+set "GAME_TITLE=Double S.T.E.A.L. - The Second Clash"
 set "GAME_XBE=default.xbe"
-set "GAME_EXE=Game"
+set "GAME_EXE=DoubleSteal"
 title %GAME_TITLE% - Build
 cd /d "%~dp0"
 echo.
