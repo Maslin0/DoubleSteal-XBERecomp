@@ -20,6 +20,7 @@
 
 #include "kernel/kernel.h"
 #include "xdk/d3d8.h"
+#include "gpu/backend.h"
 #include "xdk/hle.h"
 #include "common/controls.h"
 
@@ -932,14 +933,18 @@ void StartProfiler() {
     double from = std::atof(env), span = std::strchr(env, ',') ? std::atof(std::strchr(env, ',') + 1) : 10;
     HANDLE me = nullptr;
     DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &me, 0, FALSE, DUPLICATE_SAME_ACCESS);
-    std::thread([me, from, span] {
+    // STEAL_PROFILE_THREAD=render: the render thread instead, all the time
+    bool render = std::getenv("STEAL_PROFILE_THREAD") && !std::strcmp(std::getenv("STEAL_PROFILE_THREAD"), "render");
+    std::thread([me, from, span, render]() mutable {
         auto t0 = std::chrono::steady_clock::now();
         std::this_thread::sleep_for(std::chrono::duration<double>(from));
+        if (render) me = static_cast<HANDLE>(gpu::RenderThread());
+        if (!me) return;
         std::vector<uint64_t> rips;
         timeBeginPeriod(1);
         while (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() < from + span) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            if (!g_in_draw) continue;
+            if (!render && !g_in_draw) continue;
             if (SuspendThread(me) == DWORD(-1)) break;
             CONTEXT c{};
             c.ContextFlags = CONTEXT_FULL;
