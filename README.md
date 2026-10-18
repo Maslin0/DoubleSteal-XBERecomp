@@ -69,7 +69,13 @@ Default keys:
 ## Building
 
 ### 1. Clone the Repository
-Clone this repository using [Git](https://git-scm.com/).
+Clone this repository using [Git](https://git-scm.com/), with its SDK submodule:
+
+```
+git clone --recursive <this repository's URL>
+```
+
+In a clone made without `--recursive`, run `git submodule update --init` to fetch the SDK.
 
 ### 2. Add the Required Game Files
 Place your extracted game data files in the `assets` folder. `default.xbe` must be there, with the game's folders beside it.
