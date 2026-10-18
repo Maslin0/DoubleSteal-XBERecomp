@@ -381,6 +381,19 @@ X86_FUNC(sub_0006D7E0) {
     if (g_drawing_prompt) g_prompt_drawn = ctx.eax != 0, g_prompt_batch = batch;
     if (g_drawing_bg) g_bg_drawn = ctx.eax != 0, g_bg_batch = batch;
 }
+// FUN_000BF200 (thiscall: id, int slots[3], ...): the effect slots of a wrecked object (id 1400 on), filled only when
+// the object is in its list. FUN_000ACBA0 then frees all three slots, writing -1 at slots[i] * 0x1920 into its table,
+// without a check: an object not found left two of them whatever was on the stack (mission 6 crashed on one). They
+// start as the first, the slot being freed anyway, so a miss frees it again instead of writing far past the table.
+X86_EXTERN_FUNC(__imp__sub_000BF200);
+X86_FUNC(sub_000BF200) {
+    uint32_t slots = kernel::R32(ctx.esp + 8);
+    if (slots) {
+        kernel::W32(slots + 4, kernel::R32(slots));
+        kernel::W32(slots + 8, kernel::R32(slots));
+    }
+    __imp__sub_000BF200(ctx, base);
+}
 X86_EXTERN_FUNC(__imp__sub_000EA300);
 X86_FUNC(sub_000EA300) {  // thiscall mover (short* x, short* y) -> placed
     uint32_t mover = ctx.ecx, px = kernel::R32(ctx.esp + 4), py = kernel::R32(ctx.esp + 8);
