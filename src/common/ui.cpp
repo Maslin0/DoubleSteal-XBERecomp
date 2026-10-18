@@ -82,6 +82,13 @@ std::mutex g_prompt_lock;
 std::vector<Prompt> g_prompts_next, g_prompts;
 Clock::time_point g_prompts_at;  // the game frame that drew them began: a loading screen's loop runs no such frames
 float g_prompts_dim = 1, g_prompts_dim_next = 1;  // under a dialog's backdrop: the light they keep
+// a help line of the game's put in other words (the main menu's EXIT): its words, the middle of its sprite in the
+// page's units and its light; drawn the same frames as the prompts
+struct HelpLine {
+    std::string s;
+    float y = 0, alpha = 0;
+};
+HelpLine g_help_next, g_help_line;
 constexpr float kPromptScale = 0.78f;  // the prompts' words against the rows' lettering
 constexpr int kPromptGrey = 205;      // the prompts' words' grey, as they look
 constexpr int kPromptGreyTall = 255;  // and beside two rows of words, whiter
@@ -543,7 +550,7 @@ float HelpIn(const std::string& s, float& slide) {
 }
 
 // the help line: the game's Arial Bold in orange with a black edge all round
-void Help(ImDrawList* dl, const Frame& f, const std::string& s, float alpha = 1) {
+void Help(ImDrawList* dl, const Frame& f, const std::string& s, float alpha = 1, float y = 655) {
     float slide;
     alpha *= HelpIn(s, slide);
     ImFont* font = g_help ? g_help : g_bold ? g_bold : ImGui::GetFont();
@@ -553,7 +560,7 @@ void Help(ImDrawList* dl, const Frame& f, const std::string& s, float alpha = 1)
     // a line longer than the sprites' 512 texels is squeezed into them, as the game's longest
     constexpr float kHelpTexels = 500;
     widen = std::min(widen, kHelpTexels * sx / std::max(ext.x, 1.0f));
-    ImVec2 at = f.P(720 + slide, 655);
+    ImVec2 at = f.P(720 + slide, y);
     at = {at.x - ext.x * widen / 2, at.y - ext.y / 2};
     int first = dl->VtxBuffer.Size;
     // the edge a texel around (x offsets before the widening)
@@ -620,15 +627,18 @@ bool KeysShown() {
 
 void PromptsDraw() {
     std::vector<Prompt> prompts;
+    HelpLine help;
     float dim;
     {
         std::lock_guard lock(g_prompt_lock);
-        if (Clock::now() - g_prompts_at < std::chrono::milliseconds(100)) prompts = g_prompts;
+        if (Clock::now() - g_prompts_at < std::chrono::milliseconds(100)) prompts = g_prompts, help = g_help_line;
         dim = g_prompts_dim;
     }
-    if (prompts.empty()) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     Frame f = Fit();
+    // placed as the prompts are (the sprite's middle at 435 is 706.6), the letters 5.5 higher: they sit above their
+    // sprite's middle (measured against MAIN MENU's own lines at 1080p)
+    if (!help.s.empty() && help.alpha > 0) Help(dl, f, help.s, help.alpha * dim, 701.1f + (help.y - 435) * kTexel);
     for (const Prompt& p : prompts) {
         // as the A and B sprites are placed (measured on OPTIONS at 1080p): their middle at 435 is 706.6, a page's
         // unit 1.53 down (measured again by TIME ZONE's, at 262)
@@ -1367,6 +1377,11 @@ void AddPrompt(float x, float y, float h, uint32_t colour, const std::string& ke
 }
 
 // a dialog's backdrop over the page this frame: its prompts keep that much of their light
+void HelpLineAs(const std::string& s, float y, float alpha) {
+    std::lock_guard lock(g_prompt_lock);
+    g_help_next = {s, y, alpha};
+}
+
 void DimPrompts(float keep) {
     std::lock_guard lock(g_prompt_lock);
     g_prompts_dim_next = std::min(g_prompts_dim_next, keep);
@@ -1377,6 +1392,8 @@ void PromptsFrame() {
     std::lock_guard lock(g_prompt_lock);
     g_prompts.swap(g_prompts_next);
     g_prompts_next.clear();
+    g_help_line = std::move(g_help_next);
+    g_help_next = {};
     g_prompts_dim = g_prompts_dim_next;
     g_prompts_dim_next = 1;
     g_prompts_at = Clock::now();

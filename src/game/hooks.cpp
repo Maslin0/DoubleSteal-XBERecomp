@@ -23,6 +23,7 @@
 #include "gpu/backend.h"
 #include "xdk/hle.h"
 #include "common/controls.h"
+#include "app/app.h"
 
 X86_EXTERN_FUNC(__imp__sub_00177B8E);
 
@@ -33,6 +34,7 @@ std::vector<std::pair<int, float>> g_row_rooms_last;  // the last frame's, each 
 // the game's state (its frame FUN_00023800's object +0x4C): 9 a race being driven (its countdown too); 1 and 2 a
 // cutscene, 7 a briefing, 8 the start of a mission, 10 the pause menu (logged with STEAL_STATE_LOG=1)
 std::atomic<uint32_t> g_game_state{0};
+std::chrono::steady_clock::time_point g_main_menu_at;  // the main menu's update last ran (FUN_00103950)
 constexpr uint32_t kStateRacing = 9, kStatePause = 10;
 
 namespace ui {
@@ -47,6 +49,7 @@ bool TakeSound(uint32_t& id);
 float PromptRoom(char button, std::string& key);  // the room the button's key takes, 0 to leave the prompt be
 void AddPrompt(float x, float y, float h, uint32_t colour, const std::string& key, bool over);
 void DimPrompts(float keep);  // the frame's prompts under a dialog's backdrop, keeping that much of their light
+void HelpLineAs(const std::string& s, float y, float alpha);  // a help sprite's line in other words this frame
 void PromptsFrame();  // a menu sound Recomp Settings asks for, for the game to play
 }
 
@@ -394,6 +397,25 @@ X86_FUNC(sub_000BF200) {
     }
     __imp__sub_000BF200(ctx, base);
 }
+// The main menu's update (FUN_00103950, thiscall menu): +0x40 its state, +0x38 the scene it leaves for and +0x3C set
+// once it leaves. EXIT (or Esc) asks "Are you sure?" (state 9, its answer in 10); YES fades out (state 0xB) and, the
+// fade done, leaves for the title screen (+0x38 = 2). On the PC that is the way out of the game: the window closes
+// there instead, after the game's own fade.
+X86_EXTERN_FUNC(__imp__sub_00103950);
+X86_FUNC(sub_00103950) {
+    constexpr uint32_t kFadingOut = 0xB, kToTitle = 2;
+    uint32_t menu = ctx.ecx;
+    __imp__sub_00103950(ctx, base);
+    g_main_menu_at = std::chrono::steady_clock::now();
+    static bool closed = false;
+    if (!closed && kernel::R32(menu + 0x40) == kFadingOut && (kernel::R32(menu + 0x3C) & 0xFF) &&
+        kernel::R32(menu + 0x38) == kToTitle) {
+        closed = true;
+        LOGI("main menu EXIT: closing the window");
+        PostMessageW(static_cast<HWND>(app::Window()), WM_CLOSE, 0, 0);
+    }
+}
+
 X86_EXTERN_FUNC(__imp__sub_000EA300);
 X86_FUNC(sub_000EA300) {  // thiscall mover (short* x, short* y) -> placed
     uint32_t mover = ctx.ecx, px = kernel::R32(ctx.esp + 4), py = kernel::R32(ctx.esp + 8);
@@ -578,6 +600,35 @@ X86_FUNC(sub_000EB610) {
         return;
     }
     uint32_t sprite = kernel::R32(kernel::R32(el + 0x14) + 0x10) + uint32_t(int16_t(U16(desc + 6))) * 0x18;
+    // the main menu's EXIT closes the game here (FUN_00103950's hook): its help line says so instead of "Return to
+    // title screen". The sprite is drawn no wide, for its light (the page's fade) and whether it is drawn at all.
+    if (name && !std::strcmp(name, "Exit_Setumei") &&
+        std::chrono::steady_clock::now() - g_main_menu_at < std::chrono::milliseconds(200)) {
+        uint32_t frame = kernel::R32(ctx.esp + 8), ecx = ctx.ecx;
+        uint32_t colour = kernel::CallGuest(ctx, kElementColour, {frame});
+        ctx.ecx = ecx;
+        uint16_t w = U16(sprite + 0xC), h = U16(sprite + 0xE), u1 = U16(sprite + 8);
+        U16(sprite + 0xC) = 0;
+        U16(sprite + 8) = U16(sprite + 4);
+        g_drawing_prompt = true;
+        g_prompt_drawn = false;
+        __imp__sub_000EB610(ctx, base);
+        g_drawing_prompt = false;
+        U16(sprite + 0xC) = w;
+        U16(sprite + 8) = u1;
+        float light = 0;
+        if (g_prompt_drawn && g_prompt_batch) {
+            uint32_t u = kernel::R32(g_prompt_batch + 0x2870);
+            std::memcpy(&light, &u, 4);
+        }
+        float alpha = std::clamp(light, 0.0f, 1.0f) * float(colour >> 24) / 255;
+        // its middle, by where it hangs from its place (the description +8, bits 2-3: top, middle, bottom)
+        uint16_t anchor = U16(desc + 8);
+        float ay = (anchor & 0xC) == 4 ? 0.5f : (anchor & 0xC) == 8 ? 1.0f : 0.0f;
+        float y = *static_cast<float*>(kernel::HostPtr(el + 0x1C)) + (0.5f - ay) * h;
+        if (alpha > 0) ui::HelpLineAs("Quit the game", y, alpha);
+        return;
+    }
     DrawPrompt(ctx, base, __imp__sub_000EB610, name, sprite);
 }
 
