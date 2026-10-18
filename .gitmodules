@@ -1,4 +1,4 @@
 [submodule "sdk"]
 	path = sdk
-	url = https://github.com/YOUR_GITHUB_NAME/XboxXBERecomp.git
+	url = https://github.com/Maslin0/XboxXBERecomp.git
 	branch = dsteal
