@@ -336,7 +336,7 @@ constexpr uint32_t kElementColour = 0x000EADD0;  // thiscall element (frame) -> 
 // moves right there too
 uint32_t g_shift_mover = 0;
 int g_shift = 0;
-bool g_drawing_bg = false;      // in a dialog's backdrop's draw (Sure_Bg, Timezone_Bg), drawn when g_bg_drawn
+bool g_drawing_bg = false;      // in a dialog's backdrop's draw (Sure_Bg, Timezone_Bg, ...), drawn when g_bg_drawn
 bool g_bg_drawn = false;
 uint32_t g_bg_batch = 0;
 bool g_drawing_prompt = false;  // in a prompt's draw: whether it got room for its vertices (it was drawn)
@@ -537,9 +537,11 @@ X86_FUNC(sub_000EB610) {
             LOGW("element drawn %s", name);
         }
     }
-    // a dialog's backdrop (Sure_Bg under "Are you sure?", Timezone_Bg under TIME ZONE): a sheet of half black over
+    // a dialog's backdrop (Sure_Bg under "Are you sure?", Timezone_Bg under TIME ZONE, Transmission_Bg under CAR
+    // SELECT's TRANSMISSION): a sheet of half black over
     // the page, its prompts under it whenever drawn (the batch is drawn by layers): their keys as dark
-    if (name && (!std::strcmp(name, "Sure_Bg") || !std::strcmp(name, "Timezone_Bg"))) {
+    if (name && (!std::strcmp(name, "Sure_Bg") || !std::strcmp(name, "Timezone_Bg") ||
+                 !std::strcmp(name, "Transmission_Bg"))) {
         uint32_t frame = kernel::R32(ctx.esp + 8), ecx = ctx.ecx;
         uint32_t colour = kernel::CallGuest(ctx, kElementColour, {frame});
         ctx.ecx = ecx;
