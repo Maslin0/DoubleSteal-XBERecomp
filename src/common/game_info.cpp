@@ -19,6 +19,7 @@ void Window(void* hwnd);
 bool Message(void* hwnd, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t* result);
 void Draw(double fps);
 void Pad(int port, input::Pad& pad);
+void Presenting();
 }
 
 // what the runtime asks of the game; strings must be set, hooks may stay null
@@ -44,5 +45,6 @@ const app::GameInfo app::kGame = {
     .ui = ui::Draw,                      // ImGui drawing each frame
     .pad = ui::Pad,                        // changes a polled pad
     .rumble = nullptr,                    // changes a rumble before it is set
+    .presenting = ui::Presenting,         // a frame handed to be shown, the prompts drawn over it with it
     .safe_area = {33, 22, 654, 436, 720, 480},  // the game draws in this part of its 720x480 frame
 };

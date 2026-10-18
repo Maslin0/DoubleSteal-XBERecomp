@@ -31,7 +31,7 @@ X86_EXTERN_FUNC(__imp__sub_00177B8E);
 std::chrono::steady_clock::time_point g_last_tick;  // TickScene last ran
 // button prompts in a row this frame: its y, the room their keys took so far (FUN_000EB610)
 std::vector<std::pair<int, float>> g_row_rooms;  // row's y, room so far
-std::vector<std::pair<int, float>> g_row_rooms_last;  // the last frame's, each row's whole
+std::vector<std::pair<int, float>> g_row_rooms_last;  // each row's whole the last frame it was drawn
 // the game's state (its frame FUN_00023800's object +0x4C): 9 a race being driven (its countdown too); 1 and 2 a
 // cutscene, 7 a briefing, 8 the start of a mission, 10 the pause menu (logged with STEAL_STATE_LOG=1)
 std::atomic<uint32_t> g_game_state{0};
@@ -314,7 +314,12 @@ constexpr uint32_t kControllerType = 0x1D24EC;
 X86_EXTERN_FUNC(__imp__sub_000123A0);
 X86_FUNC(sub_000123A0) {
     ui::PromptsFrame();
-    g_row_rooms_last.swap(g_row_rooms);
+    // a row not drawn this frame keeps its whole: a menu hidden and shown again centres its row from the first frame
+    for (auto& [y, sum] : g_row_rooms) {
+        auto last = std::find_if(g_row_rooms_last.begin(), g_row_rooms_last.end(), [&](auto& r) { return r.first == y; });
+        if (last != g_row_rooms_last.end()) last->second = sum;
+        else g_row_rooms_last.push_back({y, sum});
+    }
     g_row_rooms.clear();
     // the keys as the game's actions under its controller type; the menus' keys while no race is running
     bool racing = g_game_state == kStateRacing &&
@@ -360,7 +365,7 @@ float RowRoom(int y, float room) {
     g_row_rooms.push_back({y, room});
     return 0;
 }
-// a row's whole room the last frame
+// a row's whole room the last frame it was drawn
 float RowWhole(int y) {
     for (auto& [ry, sum] : g_row_rooms_last)
         if (ry == y) return sum;

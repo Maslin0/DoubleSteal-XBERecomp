@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -71,24 +72,32 @@ constexpr float kFontPx = 64;
 // --- the game's prompts with the keyboard ---------------------------------------------------------------------
 // With the keyboard used last the game's button prompts (A OK, B BACK...) show its keys: hooks.cpp draws their
 // word without the button and leaves room on its left, where its key is lettered in brackets, as BLACK's port
-// does. A frame's prompts are gathered while the game draws it and shown until the next.
+// does. A frame's prompts are gathered while the game draws it and shown with its picture.
 struct Prompt {
     float x, y, h;  // the room's left, the prompt's top and height, in the page's 640x480 units
     uint32_t colour;
     std::string key;
     bool over;  // a dialog's own, over its backdrop
 };
-std::mutex g_prompt_lock;
-std::vector<Prompt> g_prompts_next, g_prompts;
-Clock::time_point g_prompts_at;  // the game frame that drew them began: a loading screen's loop runs no such frames
-float g_prompts_dim = 1, g_prompts_dim_next = 1;  // under a dialog's backdrop: the light they keep
 // a help line of the game's put in other words (the main menu's EXIT): its words, the middle of its sprite in the
 // page's units and its light; drawn the same frames as the prompts
 struct HelpLine {
     std::string s;
     float y = 0, alpha = 0;
 };
-HelpLine g_help_next, g_help_line;
+// what a game frame drew over its picture
+struct FramePrompts {
+    std::vector<Prompt> prompts;
+    HelpLine help;
+    float dim = 1;  // under a dialog's backdrop: the light they keep
+};
+std::mutex g_prompt_lock;
+FramePrompts g_gathering;        // the game frame being drawn
+Clock::time_point g_gathering_at;  // it began: a loading screen's loop runs no such frames, its presents show none
+// the frames handed to be shown, in order, each drawn with its own picture (the game records one frame while the one
+// before it draws), and the one shown last
+std::deque<FramePrompts> g_presented;
+FramePrompts g_shown;
 constexpr float kPromptScale = 0.78f;  // the prompts' words against the rows' lettering
 constexpr int kPromptGrey = 205;      // the prompts' words' grey, as they look
 constexpr int kPromptGreyTall = 255;  // and beside two rows of words, whiter
@@ -626,14 +635,16 @@ bool KeysShown() {
 }
 
 void PromptsDraw() {
-    std::vector<Prompt> prompts;
-    HelpLine help;
-    float dim;
     {
         std::lock_guard lock(g_prompt_lock);
-        if (Clock::now() - g_prompts_at < std::chrono::milliseconds(100)) prompts = g_prompts, help = g_help_line;
-        dim = g_prompts_dim;
+        if (!g_presented.empty()) {
+            g_shown = std::move(g_presented.front());
+            g_presented.pop_front();
+        }
     }
+    const std::vector<Prompt>& prompts = g_shown.prompts;
+    const HelpLine& help = g_shown.help;
+    float dim = g_shown.dim;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     Frame f = Fit();
     // placed as the prompts are (the sprite's middle at 435 is 706.6), the letters 5.5 higher: they sit above their
@@ -1373,30 +1384,32 @@ float PromptRoom(char button, std::string& key) {
 
 void AddPrompt(float x, float y, float h, uint32_t colour, const std::string& key, bool over) {
     std::lock_guard lock(g_prompt_lock);
-    g_prompts_next.push_back({x, y, h, colour, key, over});
+    g_gathering.prompts.push_back({x, y, h, colour, key, over});
 }
 
 // a dialog's backdrop over the page this frame: its prompts keep that much of their light
 void HelpLineAs(const std::string& s, float y, float alpha) {
     std::lock_guard lock(g_prompt_lock);
-    g_help_next = {s, y, alpha};
+    g_gathering.help = {s, y, alpha};
 }
 
 void DimPrompts(float keep) {
     std::lock_guard lock(g_prompt_lock);
-    g_prompts_dim_next = std::min(g_prompts_dim_next, keep);
+    g_gathering.dim = std::min(g_gathering.dim, keep);
 }
 
-// the game begins a frame: the last one's prompts are the ones shown
+// the game begins a frame: its prompts are gathered anew
 void PromptsFrame() {
     std::lock_guard lock(g_prompt_lock);
-    g_prompts.swap(g_prompts_next);
-    g_prompts_next.clear();
-    g_help_line = std::move(g_help_next);
-    g_help_next = {};
-    g_prompts_dim = g_prompts_dim_next;
-    g_prompts_dim_next = 1;
-    g_prompts_at = Clock::now();
+    g_gathering = {};
+    g_gathering_at = Clock::now();
+}
+
+// the game hands its frame to be shown: its prompts go with it
+void Presenting() {
+    std::lock_guard lock(g_prompt_lock);
+    g_presented.push_back(Clock::now() - g_gathering_at < std::chrono::milliseconds(100) ? g_gathering : FramePrompts{});
+    while (g_presented.size() > 8) g_presented.pop_front();  // none drawn for a while: only the latest matter
 }
 
 bool TakeSound(uint32_t& id) {
