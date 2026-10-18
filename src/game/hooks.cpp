@@ -19,6 +19,7 @@
 #include "core/log.h"
 
 #include "kernel/kernel.h"
+#include "kernel/memory.h"
 #include "xdk/d3d8.h"
 #include "gpu/backend.h"
 #include "xdk/hle.h"
@@ -433,7 +434,8 @@ struct Key {
     int circle, word;
 };
 // sprites laid out otherwise, by their sheet's width and their row in it (texels, the word from 3 before its pixels):
-// PauseMenu.xpr's A OK B CONTINUE and A JUMP B BACK, ReplayMenu.xpr's A OK B HIDE MENU with two buttons;
+// PauseMenu.xpr's A OK B CONTINUE and A JUMP B BACK, ReplayMenu.xpr's A OK B HIDE MENU with two buttons (a sheet-wide
+// sprite, its A 28 texels in);
 // Result.xpr's A OK, its button some texels into the sprite (lead: how far in the first button may start)
 struct Pair {
     int sheet_w, row;
@@ -442,7 +444,7 @@ struct Pair {
 };
 constexpr Pair kPairs[] = {{1024, 210, {{'A', 89, 116}, {'B', 162, 189}}},
                            {1024, 240, {{'A', 89, 115}, {'B', 187, 214}}},
-                           {256, 126, {{'A', 28, 54}, {'B', 103, 127}}},
+                           {256, 126, {{'A', 28, 54}, {'B', 103, 127}}, 32},
                            {512, 2, {{'A', 216, 241}, {0, 0, 0}}, 24}};
 
 // A prompt element drawn by imp with sprite (its record in the sheet): its words without their buttons, a piece each,
@@ -511,7 +513,7 @@ void DrawPrompt(X86Context& ctx, uint8_t* base, void (*imp)(X86Context&, uint8_t
         static std::vector<std::string> logged;
         std::string id = std::string(name) + std::to_string(sprite);
         if (std::find(logged.begin(), logged.end(), id) == logged.end() && (logged.push_back(id), true))
-            LOGW("prompt %s sprite u0 %u v0 %u u1 %u v1 %u w %u h %u keys %d x %.1f y %.1f anchor %X colour %08X", name, u0, v0, u1,
+            LOGE("prompt %s sprite u0 %u v0 %u u1 %u v1 %u w %u h %u keys %d x %.1f y %.1f anchor %X colour %08X", name, u0, v0, u1,
                  v1, w, h, n, at, y, anchor, colour);
     }
     // prompts side by side move right by the keys before them in their row; a row hung by its middle (TIME ZONE's)
@@ -569,7 +571,7 @@ X86_FUNC(sub_000EB610) {
         static std::vector<std::string> seen;
         if (std::find(seen.begin(), seen.end(), name) == seen.end()) {
             seen.push_back(name);
-            LOGW("element drawn %s", name);
+            LOGE("element drawn %s", name);
         }
     }
     // a dialog's backdrop (Sure_Bg under "Are you sure?", Timezone_Bg under TIME ZONE, Transmission_Bg under CAR
@@ -643,7 +645,7 @@ X86_FUNC(sub_000EAF50) {
         static std::vector<std::string> seen;
         if (std::find(seen.begin(), seen.end(), name) == seen.end()) {
             seen.push_back(name);
-            LOGW("animated element drawn %s", name);
+            LOGE("animated element drawn %s", name);
         }
     }
     if (!PromptButton(name) || !*static_cast<uint8_t*>(kernel::HostPtr(el + 0x24))) {
@@ -771,6 +773,7 @@ constexpr uint32_t kScrapeThreshold = 0x1C0568;
 constexpr uint32_t kSoundStop = 0x8B4D0;  // thiscall sound player (id)
 constexpr auto kScrapeHeld = std::chrono::milliseconds(400);
 constexpr auto kScrapeForgotten = std::chrono::milliseconds(500);
+constexpr auto kScrapeScene = std::chrono::seconds(2);
 struct Scrape {
     uint32_t id, at;                                    // the sound, where its handle was last
     std::chrono::steady_clock::time_point high, seen;  // the last call over the threshold, the last call
@@ -795,11 +798,16 @@ X86_FUNC(sub_000E05B0) {
     uint32_t slot = kernel::R32(ctx.esp + 4), velocity = kernel::R32(ctx.esp + 20);
     auto now = std::chrono::steady_clock::now();
     int32_t id = int32_t(kernel::R32(slot));
+    // a pause in the calls is a scene change: the cars, their contact slots and sounds are gone (the slots' memory may
+    // be freed), nothing of theirs is touched
+    static std::chrono::steady_clock::time_point last;
+    if (now - last > kScrapeScene) g_scrapes.clear(), g_quiet.clear();
+    last = now;
     // sounds no longer asked about: stopped if a stop of theirs was held back and their handle is still where it was
     for (size_t i = 0; i < g_scrapes.size();) {
         Scrape& s = g_scrapes[i];
         if (int32_t(s.id) != id && now - s.seen > kScrapeForgotten) {
-            if (s.held && kernel::R32(s.at) == s.id) {
+            if (s.held && mem::IsCommitted(s.at) && kernel::R32(s.at) == s.id) {
                 StopSound(ctx, s.id);
                 kernel::W32(s.at, ~0u);
             }
