@@ -435,7 +435,7 @@ struct Key {
 };
 // sprites laid out otherwise, by their sheet's width and their row in it (texels, the word from 3 before its pixels):
 // PauseMenu.xpr's A OK B CONTINUE and A JUMP B BACK, ReplayMenu.xpr's A OK B HIDE MENU with two buttons (a sheet-wide
-// sprite, its A 28 texels in);
+// sprite, its A 28 texels in) and its A CONTINUE after SAVE REPLAY (65 in);
 // Result.xpr's A OK, its button some texels into the sprite (lead: how far in the first button may start)
 struct Pair {
     int sheet_w, row;
@@ -445,6 +445,7 @@ struct Pair {
 constexpr Pair kPairs[] = {{1024, 210, {{'A', 89, 116}, {'B', 162, 189}}},
                            {1024, 240, {{'A', 89, 115}, {'B', 187, 214}}},
                            {256, 126, {{'A', 28, 54}, {'B', 103, 127}}, 32},
+                           {256, 200, {{'A', 65, 90}, {0, 0, 0}}, 68},
                            {512, 2, {{'A', 216, 241}, {0, 0, 0}}, 24}};
 
 // A prompt element drawn by imp with sprite (its record in the sheet): its words without their buttons, a piece each,
